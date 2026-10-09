@@ -12,6 +12,8 @@ import (
 type UIConfig struct {
 	HideHeader            bool   `yaml:"hideHeader"`
 	HideFooter            bool   `yaml:"hideFooter"`
+	HideTitle             bool   `yaml:"hideTitle"`    // Leave "DIFFNAV" out of the header; with no commit info to show, the header goes (default: true)
+	HideHelpHint          bool   `yaml:"hideHelpHint"` // Leave the "F1/? help" hint off the footer (default: true)
 	ShowFileTree          bool   `yaml:"showFileTree"`
 	FileTreeWidth         int    `yaml:"fileTreeWidth"`
 	SearchTreeWidth       int    `yaml:"searchTreeWidth"`
@@ -39,6 +41,8 @@ func DefaultConfig() Config {
 		UI: UIConfig{
 			HideHeader:            false,
 			HideFooter:            false,
+			HideTitle:             true,
+			HideHelpHint:          true,
 			ShowFileTree:          true,
 			FileTreeWidth:         30,
 			SearchTreeWidth:       50,

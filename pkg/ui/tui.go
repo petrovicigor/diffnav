@@ -571,7 +571,13 @@ func (m mainModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fileTree = m.fileTree.SetFiles(m.files)
 		m.preamble = strings.TrimSpace(msg.preamble)
 		m.commitBranch = msg.branch
+		prevHeader := m.headerHeight()
 		m.cachedMeta = m.parseCommitMeta()
+		if m.headerHeight() != prevHeader && m.height > 0 {
+			// The header comes and goes with commit info; resize under it.
+			m.fileTree.SetSize(m.sidebarWidth(), m.mainContentHeight()-searchHeight)
+			cmds = append(cmds, m.diffViewer.SetSize(m.width-m.sidebarWidth(), m.mainContentHeight()))
+		}
 		m.diffViewer.SetPreamble(m.preamble)
 		m.diffViewer, cmd = m.diffViewer.SetDirPatch("/", m.fileTree.GetCurrNodeDesendantDiffs())
 		cmds = append(cmds, cmd)
@@ -758,7 +764,7 @@ func (m mainModel) View() tea.View {
 
 	var sections []string
 
-	if !m.config.UI.HideHeader {
+	if m.showHeader() {
 		sections = append(sections, m.viewHeader())
 	}
 
@@ -951,6 +957,9 @@ func (m mainModel) viewHeader() string {
 	refStyle := lipgloss.NewStyle().Foreground(m.styles.Tint.Green)
 
 	headerParts := title
+	if m.config.UI.HideTitle {
+		headerParts = ""
+	}
 	meta := m.cachedMeta
 	if meta.hash != "" {
 		// Build info segment: hash date author
@@ -976,7 +985,11 @@ func (m mainModel) viewHeader() string {
 				infoParts = append(infoParts, authorStyle.Render(meta.author))
 			}
 		}
-		headerParts = headerParts + sep + strings.Join(infoParts, sep)
+		if headerParts == "" {
+			headerParts = " " + strings.Join(infoParts, sep)
+		} else {
+			headerParts = headerParts + sep + strings.Join(infoParts, sep)
+		}
 
 		// Branch ref.
 		if m.commitBranch != "" {
@@ -1039,6 +1052,10 @@ func (m mainModel) footerView() string {
 		usedWidth += lipgloss.Width(sep) + lipgloss.Width(watchLabel)
 	}
 
+	if m.config.UI.HideHelpHint {
+		usedWidth -= lipgloss.Width(help)
+		help = ""
+	}
 	spacing := base.Render(strings.Repeat(" ", max(0, m.width-usedWidth)))
 	parts = append(parts, spacing, help)
 	return base.
@@ -1175,9 +1192,20 @@ func (m mainModel) sidebarWidth() int {
 	return 0
 }
 
-func (m mainModel) headerHeight() int {
+// showHeader: the header row is on unless hidden by config, or when it would
+// be empty (no "DIFFNAV" title and no commit info).
+func (m mainModel) showHeader() bool {
 	if m.config.UI.HideHeader {
-		return 0
+		return false
+	}
+	return !m.config.UI.HideTitle || m.cachedMeta.hash != ""
+}
+
+// headerHeight is the rows above the panes: the header (when shown) and the
+// separator line, which is always drawn.
+func (m mainModel) headerHeight() int {
+	if !m.showHeader() {
+		return headerHeight - 1
 	}
 	return headerHeight
 }

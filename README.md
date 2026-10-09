@@ -157,8 +157,12 @@ ui:
   # Hide the header to get more screen space for diffs
   hideHeader: true
 
-  # Hide the footer (keybindings help)
+  # Hide the footer (file count and diff stats)
   hideFooter: true
+
+  # Bring back the "DIFFNAV" title and the "F1/? help" footer hint (default: hidden)
+  hideTitle: false
+  hideHelpHint: false
 
   # Start with the file tree hidden (toggle with 'e')
   showFileTree: false
@@ -185,14 +189,19 @@ ui:
   startFoldersOpenDepth: 1
 
   # The ID of the theme to use. Press `T` to see available themes - IDs are
-  shown below each theme name. (default: tokyo_night)
+  # shown below each theme name. "miasma" (the default) picks miasma_dark or
+  # miasma_light from $MIASMA_MODE, else the terminal background, else dark;
+  # Miasma styles the diff with the miasma-dark / miasma-light delta features
+  # from your gitconfig.
   theme: gruvbox_dark
 ```
 
 | Option                     | Type   | Default             | Description                                               |
 | :------------------------- | :----- | :------------------ | :-------------------------------------------------------- |
-| `ui.hideHeader`            | bool   | `false`             | Hide the "DIFFNAV" header                                 |
-| `ui.hideFooter`            | bool   | `false`             | Hide the footer with keybindings help                     |
+| `ui.hideHeader`            | bool   | `false`             | Hide the header (title and commit info)                   |
+| `ui.hideFooter`            | bool   | `false`             | Hide the footer (file count, diff stats)                  |
+| `ui.hideTitle`             | bool   | `true`              | Leave "DIFFNAV" out of the header (no commit = no header) |
+| `ui.hideHelpHint`          | bool   | `true`              | Leave the "F1/? help" hint off the footer                 |
 | `ui.showFileTree`          | bool   | `true`              | Show file tree on startup                                 |
 | `ui.fileTreeWidth`         | int    | `26`                | Width of the file tree sidebar                            |
 | `ui.searchTreeWidth`       | int    | `50`                | Width of the search panel                                 |
@@ -201,7 +210,7 @@ ui:
 | `ui.showDiffStats`         | bool   | `true`              | Show the amount of lines added / removed next to the file |
 | `ui.sideBySide`            | bool   | `true`              | Use side-by-side diff view (false for unified)            |
 | `ui.startFoldersOpenDepth` | int    | `-1`                | Folder open depth on start (-1 = all, 0 = none)           |
-| `ui.theme`                 | string | `tokyo_night`       | The ID of the theme to use                                |
+| `ui.theme`                 | string | `miasma`            | The ID of the theme to use (`miasma` = auto dark/light)   |
 
 ### Icon Styles
 
