@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"charm.land/log/v2"
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
+	tint "github.com/lrstanley/bubbletint/v2"
 
 	"github.com/dlvhdr/diffnav/pkg/filenode"
 	"github.com/dlvhdr/diffnav/pkg/icons"
@@ -614,8 +615,55 @@ type deltaOpts struct {
 	IsDelete bool
 }
 
+// deltaFeature is the gitconfig delta feature that styles the diff for
+// theme ("" = diffnav styles delta itself). The Miasma tints hand all
+// colours to the user's own miasma-dark / miasma-light delta features.
+func deltaFeature(theme *tint.Tint) string {
+	if !common.IsMiasma(theme) {
+		return ""
+	}
+	if theme.Dark {
+		return "miasma-dark"
+	}
+	return "miasma-light"
+}
+
+// featureDeltaArgs runs delta with feature for every colour and style,
+// passing only layout: no pager, line numbers (one column for new / deleted
+// files), tab width, no wrap symbols, the pane's width, no wrapping limit,
+// and side-by-side when asked.
+func featureDeltaArgs(feature string, sideBySide bool, width int, opts deltaOpts) []string {
+	args := []string{
+		"--features=" + feature,
+		"--paging=never",
+		"--line-numbers",
+		"--tabs=2",
+		"--wrap-left-symbol= ",
+		"--wrap-right-symbol= ",
+		"--wrap-right-prefix-symbol= ",
+		fmt.Sprintf("-w=%d", width),
+		"--max-line-length=0",
+		"--wrap-max-lines=unlimited",
+	}
+	switch {
+	case opts.IsNew:
+		args = append(args, "--line-numbers-left-format=", "--line-numbers-right-format={np:>4} ")
+	case opts.IsDelete:
+		args = append(args, "--line-numbers-left-format={nm:>4} ", "--line-numbers-right-format=")
+	default:
+		args = append(args, "--line-numbers-left-format={nm:>4} ", "--line-numbers-right-format={np:>4} ")
+	}
+	if sideBySide {
+		args = append(args, "--side-by-side")
+	}
+	return args
+}
+
 func (m *Model) makeDeltaArgs(sideBySide bool, width int, opts deltaOpts) []string {
 	theme := common.Themes.Current()
+	if feature := deltaFeature(theme); feature != "" {
+		return featureDeltaArgs(feature, sideBySide, width, opts)
+	}
 	sSelection := lipgloss.NewStyle().Background(m.Styles.Colors.SelectionBg)
 	selectionColor := common.LipglossColorToHex(m.Styles.Colors.SelectionBg)
 	white := common.LipglossColorToHex(theme.White)
