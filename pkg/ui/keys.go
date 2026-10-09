@@ -12,6 +12,8 @@ type KeyMap struct {
 	Top                   key.Binding
 	NextFile              key.Binding
 	PrevFile              key.Binding
+	JumpNextFile          key.Binding
+	JumpPrevFile          key.Binding
 	CtrlD                 key.Binding
 	CtrlU                 key.Binding
 	CtrlE                 key.Binding
@@ -72,6 +74,14 @@ var keys = &KeyMap{
 	PrevFile: key.NewBinding(
 		key.WithKeys("p", "N"),
 		key.WithHelp("p/N", "prev file"),
+	),
+	JumpNextFile: key.NewBinding(
+		key.WithKeys("]"),
+		key.WithHelp("]", "scroll to next file"),
+	),
+	JumpPrevFile: key.NewBinding(
+		key.WithKeys("["),
+		key.WithHelp("[", "scroll to prev file"),
 	),
 	CtrlD: key.NewBinding(
 		key.WithKeys("ctrl+d"),
@@ -172,6 +182,8 @@ func KeyGroups() [][]key.Binding {
 		keys.Bottom,
 		keys.NextFile,
 		keys.PrevFile,
+		keys.JumpNextFile,
+		keys.JumpPrevFile,
 		keys.CtrlD,
 		keys.CtrlU,
 		keys.ScrollLeft,

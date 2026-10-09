@@ -30,6 +30,10 @@ type cachedNode struct {
 	additions int64
 	deletions int64
 	diff      []diffLine
+	// fileStarts[i] is the line where files[i]'s render starts in diff
+	// (directory views only; filePaths[i] is its name).
+	fileStarts []int
+	filePaths  []string
 }
 
 type nodeCache map[string]*cachedNode
@@ -94,6 +98,8 @@ type Model struct {
 	sideBySide bool
 	preamble   string
 	sb         common.Scrollbar
+	// jump remembers the last file jump (JumpFile), see currentFileIdx.
+	jump fileJump
 }
 
 // SetPreamble stores the preamble text (e.g. commit metadata from git show).
@@ -223,8 +229,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
 	case diffContentMsg:
-		if _, ok := m.cache[msg.cacheKey]; ok {
-			m.cache[msg.cacheKey].diff = msg.lines
+		if node, ok := m.cache[msg.cacheKey]; ok {
+			node.diff = msg.lines
+			node.fileStarts = msg.fileStarts
+			node.filePaths = msg.filePaths
 		}
 		m.fvp.SetObjects(msg.lines)
 	}
@@ -501,15 +509,17 @@ func (m *Model) diffDir(dir *cachedNode, width int, sideBySide bool, preamble st
 	key := cacheKey(dir.path, sideBySide)
 	return func() tea.Msg {
 		args := m.makeDeltaArgs(sideBySide, width, deltaOpts{})
-		log.Info("executing delta", "cmd", fmt.Sprintf(`delta %s`, strings.Join(args, " ")))
-		deltac := exec.Command("delta", args...)
-		deltac.Env = os.Environ()
-		strs := strings.Builder{}
-		for _, file := range dir.files {
-			strs.WriteString(file.String())
-		}
-		deltac.Stdin = strings.NewReader(strs.String() + "\n")
-		out, err := deltac.Output()
+		log.Info("executing delta per file", "cmd", fmt.Sprintf(`delta %s`, strings.Join(args, " ")))
+		// One delta per file (in parallel) instead of one for the whole
+		// directory: the concatenated output is the same, and it tells
+		// where each file starts, which the file tree follows.
+		outs, err := renderFiles(dir.files, func(file *gitdiff.File) (string, error) {
+			deltac := exec.Command("delta", args...)
+			deltac.Env = os.Environ()
+			deltac.Stdin = strings.NewReader(file.String() + "\n")
+			out, err := deltac.Output()
+			return string(out), err
+		})
 		if err != nil {
 			if stdErr, ok := err.(*exec.ExitError); ok {
 				return common.ErrMsg{Err: err, Message: string(stdErr.Stderr)}
@@ -518,11 +528,21 @@ func (m *Model) diffDir(dir *cachedNode, width int, sideBySide bool, preamble st
 			return common.ErrMsg{Err: err}
 		}
 
-		text := string(out)
+		head := ""
 		if preamble != "" {
-			text = m.renderPreamble(preamble) + "\n" + text
+			head = m.renderPreamble(preamble) + "\n"
 		}
-		return diffContentMsg{cacheKey: key, lines: stringToDiffLines(text)}
+		text, starts := joinFileRenders(head, outs)
+		paths := make([]string, len(dir.files))
+		for i, f := range dir.files {
+			paths[i] = filenode.GetFileName(f)
+		}
+		return diffContentMsg{
+			cacheKey:   key,
+			lines:      stringToDiffLines(text),
+			fileStarts: starts,
+			filePaths:  paths,
+		}
 	}
 }
 
@@ -559,8 +579,10 @@ func (m Model) renderPreamble(preamble string) string {
 }
 
 type diffContentMsg struct {
-	cacheKey string
-	lines    []diffLine
+	cacheKey   string
+	lines      []diffLine
+	fileStarts []int
+	filePaths  []string
 }
 
 func (m *Model) ClearCache() {

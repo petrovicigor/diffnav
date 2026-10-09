@@ -26,19 +26,27 @@ type Model struct {
 	t     tree.Model
 	files []*gitdiff.File
 	cfg   config.Config
+	// current is the path of the file the diff viewer's directory view is
+	// scrolled to ("" = none). A pointer, so the style closures the tree
+	// keeps see it however the Model is copied.
+	current *string
 }
+
+// treeScrollOff is the rows kept visible around the cursor / current file.
+const treeScrollOff = 3
 
 func New(cfg config.Config, styles *common.Styles) Model {
 	t := tree.New(nil, constants.OpenFileTreeWidth, 0)
 	t.SetCursorCharacter("")
 	t.SetShowHelp(false)
 	t.Enumerator(enumerator).Indenter(indenter)
-	t.SetScrollOff(3)
+	t.SetScrollOff(treeScrollOff)
 
 	m := Model{
-		t:      t,
-		cfg:    cfg,
-		Common: common.Common{Styles: styles},
+		t:       t,
+		cfg:     cfg,
+		Common:  common.Common{Styles: styles},
+		current: new(string),
 	}
 
 	open, closed := getDirIcons(m.cfg.UI.Icons)
@@ -90,6 +98,13 @@ func (m *Model) updateStyles() {
 		TreeStyle:       base,
 		RootNodeStyle:   base.Foreground(m.Styles.Tint.BrightBlue),
 		ParentNodeStyle: base.Foreground(m.Styles.Tint.BrightBlue),
+		NodeStyleFunc: func(children tree.Nodes, i int) lipgloss.Style {
+			if fn, ok := children.At(i).GivenValue().(*filenode.FileNode); ok &&
+				m.isCurrent(fn.Path()) {
+				return base.Bold(true).Background(m.Styles.Colors.CurrentBg)
+			}
+			return base
+		},
 		SelectedNodeStyleFunc: func(children tree.Nodes, i int) lipgloss.Style {
 			base := base.Bold(true).Background(m.Styles.Colors.SelectionBg)
 			child := children.At(i)
@@ -503,4 +518,61 @@ func (m *Model) SetIconStyle(iconStyle string) {
 func (m *Model) SetStyles(styles *common.Styles) {
 	m.Styles = styles
 	m.rebuildTree()
+}
+
+func (m *Model) isCurrent(path string) bool {
+	return m.current != nil && *m.current != "" && *m.current == path
+}
+
+// CurrentFile is the file marked as the one in view ("" = none).
+func (m *Model) CurrentFile() string {
+	if m.current == nil {
+		return ""
+	}
+	return *m.current
+}
+
+// SetCurrentFile marks path as the file the diff viewer is showing (its own
+// highlight, separate from the cursor) and scrolls the tree so it stays
+// visible. "" clears the mark. It reports whether anything changed.
+func (m *Model) SetCurrentFile(path string) bool {
+	if m.current == nil {
+		m.current = new(string)
+	}
+	if *m.current == path {
+		return false
+	}
+	*m.current = path
+	scroll := m.t.ViewportYOffset()
+	// Re-render with the new mark: the tree only redraws on a cursor
+	// update, and a zero move keeps the cursor where it is.
+	m.t.SetYOffset(m.t.YOffset())
+	m.t.SetViewportYOffset(scroll)
+	if path == "" {
+		return true
+	}
+	for _, node := range m.t.AllNodes() {
+		if fn, ok := node.GivenValue().(*filenode.FileNode); ok && fn.Path() == path {
+			m.t.SetViewportYOffset(revealLine(node.LineOffset(), scroll, m.t.Height(), treeScrollOff))
+			break
+		}
+	}
+	return true
+}
+
+// revealLine is the viewport offset that shows line (with up to scrollOff
+// lines around it) in a viewport of height rows now scrolled to top, moving
+// it as little as possible.
+func revealLine(line, top, height, scrollOff int) int {
+	if height <= 0 {
+		return top
+	}
+	scrollOff = min(scrollOff, (height-1)/2)
+	if line-scrollOff < top {
+		return max(line-scrollOff, 0)
+	}
+	if line+scrollOff > top+height-1 {
+		return line + scrollOff - height + 1
+	}
+	return top
 }

@@ -253,7 +253,19 @@ func (m mainModel) fetchWatchDiff() tea.Msg {
 	return watchResultMsg{output: output, err: err}
 }
 
+// Update runs update, then points the file tree's "current" mark at the
+// file the diff viewer is scrolled to: anything (keys, mouse, a re-render,
+// a resize) can move the viewport.
 func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	if mm, ok := next.(mainModel); ok {
+		mm.fileTree.SetCurrentFile(mm.diffViewer.CurrentFilePath())
+		return mm, cmd
+	}
+	return next, cmd
+}
+
+func (m mainModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	log.Debug("tui", "msg", fmt.Sprintf("%T", msg))
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
@@ -399,6 +411,17 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m, cmd = m.moveToFile(1)
 			}
 			cmds = append(cmds, cmd)
+		case key.Matches(msg, keys.JumpNextFile, keys.JumpPrevFile):
+			delta := 1
+			if key.Matches(msg, keys.JumpPrevFile) {
+				delta = -1
+			}
+			if m.diffViewer.IsDirView() {
+				m.diffViewer.JumpFile(delta)
+			} else {
+				m, cmd = m.moveToFile(delta)
+				cmds = append(cmds, cmd)
+			}
 		case key.Matches(msg, keys.Up):
 			if m.activePanel == FileTreePanel {
 				m, cmd = m.moveCursor(moveUp)

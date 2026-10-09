@@ -222,6 +222,7 @@ ui:
 | <kbd>k</kbd>                | Previous node                    |
 | <kbd>n</kbd>                | Next file                        |
 | <kbd>p</kbd> / <kbd>N</kbd> | Previous file                    |
+| <kbd>]</kbd> / <kbd>[</kbd> | Scroll to the next / previous file (all-files view) |
 | <kbd>Ctrl-d</kbd>           | Scroll the diff half page down   |
 | <kbd>Ctrl-u</kbd>           | Scroll the diff half page up     |
 | <kbd>Ctrl-e</kbd>           | Scroll the diff one line down    |
