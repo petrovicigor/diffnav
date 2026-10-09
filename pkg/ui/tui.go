@@ -105,6 +105,9 @@ type mainModel struct {
 	watchInFlight     bool
 	repoRoot          string
 	styles            common.Styles
+	// autoMiasma: the Miasma theme with no MIASMA_MODE, so the terminal's
+	// background (BackgroundColorMsg) picks dark or light.
+	autoMiasma bool
 }
 
 type ModelOpts struct {
@@ -118,6 +121,7 @@ func New(opts ModelOpts, cfg config.Config) mainModel {
 	if envTheme := os.Getenv("DIFFNAV_THEME"); envTheme != "" {
 		theme = envTheme
 	}
+	theme, autoMiasma := common.ResolveThemeID(theme, os.Getenv)
 	common.Themes.SetTintID(theme)
 
 	initialPanel := FileTreePanel
@@ -139,6 +143,7 @@ func New(opts ModelOpts, cfg config.Config) mainModel {
 		watchInterval:     cfg.Watch.Interval,
 		styles:            common.MakeStyles(),
 		lastTheme:         common.Themes.Current(),
+		autoMiasma:        autoMiasma,
 	}
 	m.fileTree = filetree.New(cfg, &m.styles)
 	m.fileTree.SetSize(cfg.UI.FileTreeWidth, 0)
@@ -152,12 +157,7 @@ func New(opts ModelOpts, cfg config.Config) mainModel {
 	m.filesSearch.KeyMap.AcceptSuggestion = key.NewBinding(key.WithKeys("tab"))
 	m.filesSearch.Prompt = " "
 	m.filesSearch.Placeholder = "Filter files 󰬛 "
-	m.filesSearch.SetStyles(textinput.Styles{
-		Focused: textinput.StyleState{
-			Placeholder: lipgloss.NewStyle().Foreground(m.styles.Tint.Black),
-			Prompt:      lipgloss.NewStyle().Foreground(m.styles.Tint.Black),
-		},
-	})
+	m.applySearchStyles()
 	m.filesSearch.SetWidth(cfg.UI.FileTreeWidth - 2)
 
 	m.resultsVp = viewport.Model{}
@@ -211,8 +211,26 @@ type watchResultMsg struct {
 	err    error
 }
 
+func (m *mainModel) applySearchStyles() {
+	m.filesSearch.SetStyles(textinput.Styles{
+		Focused: textinput.StyleState{
+			Placeholder: lipgloss.NewStyle().Foreground(m.styles.Tint.Black),
+			Prompt:      lipgloss.NewStyle().Foreground(m.styles.Tint.Black),
+			Text:        lipgloss.NewStyle().Foreground(m.styles.Tint.Fg),
+		},
+		Blurred: textinput.StyleState{
+			Placeholder: lipgloss.NewStyle().Foreground(m.styles.Tint.Black),
+			Prompt:      lipgloss.NewStyle().Foreground(m.styles.Tint.Black),
+			Text:        lipgloss.NewStyle().Foreground(m.styles.Tint.White),
+		},
+	})
+}
+
 func (m mainModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.diffViewer.Init(), m.fetchRepoRoot}
+	if m.autoMiasma {
+		cmds = append(cmds, tea.RequestBackgroundColor)
+	}
 	if m.watchEnabled {
 		cmds = append(cmds, m.scheduleWatchTick())
 	}
@@ -449,6 +467,19 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case tea.BackgroundColorMsg:
+		if m.autoMiasma {
+			m.autoMiasma = false
+			id := common.MiasmaThemeForMode("dark")
+			if !msg.IsDark() {
+				id = common.MiasmaThemeForMode("light")
+			}
+			if id != common.Themes.Current().ID {
+				cmds = append(cmds, m.onThemeChanged(id))
+				m.lastTheme = common.Themes.Current()
+			}
+		}
+
 	case themepicker.ThemePreviewMsg:
 		cmds = append(cmds, m.onThemeChanged(msg.Theme.ID))
 
@@ -551,7 +582,8 @@ func (m *mainModel) onThemeChanged(themeId string) tea.Cmd {
 	if ok := common.Themes.SetTintID(themeId); ok {
 		m.styles = common.MakeStyles()
 		m.fileTree.SetStyles(&m.styles)
-		return m.diffViewer.UpdateTheme()
+		m.applySearchStyles()
+		return m.diffViewer.UpdateTheme(&m.styles)
 	}
 	return nil
 }

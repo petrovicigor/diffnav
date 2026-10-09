@@ -100,33 +100,55 @@ func (m *Model) SetPreamble(preamble string) {
 	m.preamble = preamble
 }
 
+func viewportStyles(styles *common.Styles) viewport.Styles {
+	return viewport.Styles{
+		SelectionPrefix: lipgloss.NewStyle().Foreground(styles.Tint.Blue).Render("▐"),
+		SelectedItemStyle: lipgloss.NewStyle().
+			Background(styles.Colors.SelectionBg).
+			Foreground(styles.Tint.BrightWhite),
+		FooterStyle: lipgloss.NewStyle().
+			BorderForeground(styles.Tint.BrightBlack).
+			Background(styles.Tint.BrightBlack).
+			Border(lipgloss.Border{Left: "", Right: ""}, false, true, false, true).
+			Foreground(styles.Tint.White).
+			Italic(true),
+	}
+}
+
+func scrollbarStyles(styles *common.Styles) common.ScrollbarStyles {
+	return common.ScrollbarStyles{
+		Thumb: lipgloss.NewStyle().Foreground(styles.Tint.Blue),
+		Track: lipgloss.NewStyle().Foreground(styles.Tint.Black),
+	}
+}
+
+func filterableStyles(styles *common.Styles) filterableviewport.Styles {
+	s := filterableviewport.DefaultStyles()
+	s.Filter.Focused.TextInput.Text = lipgloss.NewStyle().
+		Foreground(styles.Tint.BrightWhite)
+	s.Filter.Unfocused.TextInput.Text = lipgloss.NewStyle().
+		Foreground(styles.Tint.White)
+	s.Filter.Empty = lipgloss.NewStyle().Foreground(styles.Tint.White)
+	s.MatchesCount.Matches = lipgloss.NewStyle().
+		Foreground(styles.Tint.BrightYellow)
+	s.Match.Focused = lipgloss.NewStyle().
+		Background(styles.Colors.MatchFocusedBg).
+		Foreground(styles.Colors.MatchFocusedFg)
+	s.Match.Unfocused = lipgloss.NewStyle().
+		Background(styles.Colors.MatchBg).
+		Foreground(styles.Colors.MatchFg)
+	return s
+}
+
 func New(sideBySide bool, styles *common.Styles) Model {
 	vp := viewport.New(
 		0,
 		0,
 		viewport.WithKeyMap[diffLine](ViewportKeyMap),
-		viewport.WithStyles[diffLine](
-			viewport.Styles{
-				SelectionPrefix: lipgloss.NewStyle().Foreground(styles.Tint.Blue).Render("▐"),
-				SelectedItemStyle: lipgloss.NewStyle().
-					Background(styles.Colors.SelectionBg).
-					Foreground(styles.Tint.BrightWhite),
-				FooterStyle: lipgloss.NewStyle().
-					BorderForeground(styles.Tint.BrightBlack).
-					Background(styles.Tint.BrightBlack).
-					Border(lipgloss.Border{Left: "", Right: ""}, false, true, false, true).
-					Foreground(styles.Tint.White).
-					Italic(true),
-			},
-		),
+		viewport.WithStyles[diffLine](viewportStyles(styles)),
 	)
 
-	sb := common.Scrollbar{
-		Styles: common.ScrollbarStyles{
-			Thumb: lipgloss.NewStyle().Foreground(styles.Tint.Blue),
-			Track: lipgloss.NewStyle().Foreground(styles.Tint.Black),
-		},
-	}
+	sb := common.Scrollbar{Styles: scrollbarStyles(styles)}
 
 	filterableViewportKeyMap := filterableviewport.DefaultKeyMap()
 	filterableViewportKeyMap.CancelFilterKey = key.NewBinding(
@@ -134,20 +156,7 @@ func New(sideBySide bool, styles *common.Styles) Model {
 		key.WithHelp("esc/ctrl+c", "cancel filter"),
 	)
 
-	filterableViewportStyles := filterableviewport.DefaultStyles()
-	filterableViewportStyles.Filter.Focused.TextInput.Text = lipgloss.NewStyle().
-		Foreground(styles.Tint.BrightWhite)
-	filterableViewportStyles.Filter.Unfocused.TextInput.Text = lipgloss.NewStyle().
-		Foreground(styles.Tint.White)
-	filterableViewportStyles.Filter.Empty = lipgloss.NewStyle().Foreground(styles.Tint.White)
-	filterableViewportStyles.MatchesCount.Matches = lipgloss.NewStyle().
-		Foreground(styles.Tint.BrightYellow)
-	filterableViewportStyles.Match.Focused = lipgloss.NewStyle().
-		Background(lipgloss.Darken(styles.Tint.Yellow, 0.2)).
-		Foreground(lipgloss.Lighten(styles.Tint.Yellow, 0.5))
-	filterableViewportStyles.Match.Unfocused = lipgloss.NewStyle().
-		Background(lipgloss.Lighten(styles.Colors.SelectionBg, 0.1)).
-		Foreground(lipgloss.Lighten(styles.Tint.BrightWhite, 0.5))
+	filterableViewportStyles := filterableStyles(styles)
 
 	return Model{
 		Common: common.Common{
@@ -252,8 +261,17 @@ func (m *Model) SetSize(width, height int) tea.Cmd {
 	return m.diff()
 }
 
-func (m *Model) UpdateTheme() tea.Cmd {
+// UpdateTheme re-styles the viewer with styles (the theme's new Styles) and
+// re-renders the diff.
+func (m *Model) UpdateTheme(styles *common.Styles) tea.Cmd {
+	if styles != nil {
+		m.Styles = styles
+	}
+	m.fvp.SetViewportStyles(viewportStyles(m.Styles))
+	m.fvp.SetFilterableViewportStyles(filterableStyles(m.Styles))
+	m.sb.Styles = scrollbarStyles(m.Styles)
 	m.ClearCache()
+	m.updateHeader()
 	return m.diff()
 }
 

@@ -24,6 +24,12 @@ type Colors struct {
 	SelectionBg       color.Color
 	DarkerSelectionBg color.Color
 	FaintBlue         func() color.Color
+	// CurrentBg marks the file at the top of the diff viewport in the file
+	// tree (distinct from the cursor's SelectionBg).
+	CurrentBg color.Color
+	// Search match highlights in the diff viewer.
+	MatchFg, MatchBg               color.Color
+	MatchFocusedFg, MatchFocusedBg color.Color
 }
 
 func MakeStyles() Styles {
@@ -41,6 +47,26 @@ func MakeStyles() Styles {
 		FaintBlue: func() color.Color {
 			return lipgloss.Darken(t.Blue, 0.8)
 		},
+		CurrentBg:      lipgloss.Darken(t.Green, 0.6),
+		MatchFg:        lipgloss.Lighten(t.BrightWhite, 0.5),
+		MatchBg:        lipgloss.Lighten(selectionBg, 0.1),
+		MatchFocusedFg: lipgloss.Lighten(t.Yellow, 0.5),
+		MatchFocusedBg: lipgloss.Darken(t.Yellow, 0.2),
+	}
+
+	if IsMiasma(t) {
+		mc := miasmaDarkColors
+		if !t.Dark {
+			mc = miasmaLightColors
+		}
+		colors.SelectionFg = hexColor(mc.selectionFg)
+		colors.SelectionBg = hexColor(mc.selectionBg)
+		colors.DarkerSelectionBg = hexColor(mc.footerBg)
+		colors.CurrentBg = hexColor(mc.currentBg)
+		colors.MatchFg = hexColor(mc.matchFg)
+		colors.MatchBg = hexColor(mc.matchBg)
+		colors.MatchFocusedFg = hexColor(mc.matchFocusedFg)
+		colors.MatchFocusedBg = hexColor(mc.matchFocusedBg)
 	}
 
 	return Styles{
@@ -50,6 +76,8 @@ func MakeStyles() Styles {
 }
 
 var SupportedThemeToDeltaSyntax = map[string]string{
+	TintMiasmaDark.ID:                 "gruvbox-dark",
+	TintMiasmaLight.ID:                "gruvbox-light",
 	tint.TintCatppuccinFrappe.ID:      "Catppuccin Frappe",
 	tint.TintCatppuccinMacchiato.ID:   "Catppuccin Macchiato",
 	tint.TintCatppuccinMocha.ID:       "Catppuccin Mocha",
@@ -75,6 +103,8 @@ var Themes *tint.Registry
 func RegisterSupportedTints() {
 	Themes = tint.NewRegistry(
 		tint.TintTokyoNight,
+		TintMiasmaDark,
+		TintMiasmaLight,
 		tint.TintCatppuccinFrappe,
 		tint.TintCatppuccinMacchiato,
 		tint.TintCatppuccinMocha,
