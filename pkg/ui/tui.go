@@ -436,7 +436,8 @@ func (m mainModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.diffViewer.IsDirView() {
 				m.diffViewer.JumpFile(delta)
-			} else {
+			} else if !m.diffViewer.Searching() && !m.diffViewer.Filtering() {
+				// Like n/p: switching files would drop the filter's view.
 				m, cmd = m.moveToFile(delta)
 				cmds = append(cmds, cmd)
 			}

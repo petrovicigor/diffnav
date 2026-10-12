@@ -238,3 +238,42 @@ func updateMainModel(t *testing.T, m mainModel, msg tea.Msg) mainModel {
 
 	return result
 }
+
+func keyPress(s string) tea.KeyPressMsg {
+	switch s {
+	case "enter":
+		return tea.KeyPressMsg{Code: tea.KeyEnter}
+	}
+	r := []rune(s)[0]
+	return tea.KeyPressMsg{Code: r, Text: s}
+}
+
+// ] / [ in a single-file view move to the next file, like n/p, and like
+// n/p they do nothing while a filter is applied.
+func TestJumpKeysRespectFilterInFileView(t *testing.T) {
+	m := newTestMainModel(t)
+	m = updateMainModel(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m, _ = m.moveToFile(1)
+	if m.diffViewer.IsDirView() {
+		t.Fatal("precondition: a single-file view")
+	}
+	first := m.fileTree.CurrNodePath()
+
+	moved := updateMainModel(t, m, keyPress("]"))
+	if moved.fileTree.CurrNodePath() == first {
+		t.Fatal("] should move to the next file without a filter")
+	}
+
+	m = updateMainModel(t, m, keyPress("/"))
+	m = updateMainModel(t, m, keyPress("a"))
+	m = updateMainModel(t, m, keyPress("enter"))
+	if !m.diffViewer.Filtering() || m.diffViewer.Searching() {
+		t.Fatalf("precondition: filter applied (filtering %v, searching %v)", m.diffViewer.Filtering(), m.diffViewer.Searching())
+	}
+	for _, k := range []string{"]", "["} {
+		after := updateMainModel(t, m, keyPress(k))
+		if got := after.fileTree.CurrNodePath(); got != first {
+			t.Errorf("%s with a filter applied moved to %q", k, got)
+		}
+	}
+}
