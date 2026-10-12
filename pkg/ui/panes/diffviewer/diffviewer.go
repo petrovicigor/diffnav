@@ -2,8 +2,6 @@ package diffviewer
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -30,20 +28,29 @@ type cachedNode struct {
 	additions int64
 	deletions int64
 	diff      []diffLine
-	// fileStarts[i] is the line where files[i]'s render starts in diff
-	// (directory views only; filePaths[i] is its name).
+	// A finished render (the nodes in the cache and on screen): key is its
+	// renderKey, isDir whether it is a directory view, and fileStarts[i]
+	// the line where its i-th file's render starts in diff (filePaths[i]
+	// is that file's name; directory views only).
+	key        string
+	isDir      bool
 	fileStarts []int
 	filePaths  []string
 }
 
 type nodeCache map[string]*cachedNode
 
-func cacheKey(path string, sideBySide bool) string {
-	key := path + ":" + common.Themes.Current().ID
-	if sideBySide {
-		return key + ":sbs"
+// renderKey names a render of node: the view kind, its path, and all that
+// shapes delta's output (width, theme, layout). A render is shown or reused
+// only under the key it was asked for.
+func (m *Model) renderKey(node *cachedNode, dir bool) string {
+	kind, sbs := "file", m.sideBySide
+	if dir {
+		kind = "dir"
+	} else if f := node.files[0]; f.IsNew || f.IsDelete {
+		sbs = false
 	}
-	return key
+	return fmt.Sprintf("%s:%s:%d:%s:%t", kind, node.path, m.contentWidth(), common.Themes.Current().ID, sbs)
 }
 
 type diffLine struct {
@@ -100,6 +107,14 @@ type Model struct {
 	sb         common.Scrollbar
 	// jump remembers the last file jump (JumpFile), see currentFileIdx.
 	jump fileJump
+	// shown is the render on screen. file / dir are what was asked for
+	// (header and stats); until its render lands, shown is the previous one.
+	shown *cachedNode
+	// gen numbers render requests: a render lands only if no newer request
+	// (another node, width, theme or layout) was made since.
+	gen uint64
+	// rootAdded / rootDeleted are the stats of the whole diff ("/").
+	rootAdded, rootDeleted int64
 }
 
 // SetPreamble stores the preamble text (e.g. commit metadata from git show).
@@ -227,12 +242,20 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0)
 	switch msg := msg.(type) {
 	case diffContentMsg:
-		if node, ok := m.cache[msg.cacheKey]; ok {
-			node.diff = msg.lines
-			node.fileStarts = msg.fileStarts
-			node.filePaths = msg.filePaths
+		// A late render (for a node, width, theme or layout no longer
+		// asked for) is dropped: it would replace what is on screen.
+		if msg.gen == m.gen {
+			node := &cachedNode{
+				path:       msg.path,
+				diff:       msg.lines,
+				key:        msg.key,
+				isDir:      msg.isDir,
+				fileStarts: msg.fileStarts,
+				filePaths:  msg.filePaths,
+			}
+			m.cache[msg.key] = node
+			m.show(node)
 		}
-		m.fvp.SetObjects(msg.lines)
 	}
 
 	fvp, fvpCmd := m.fvp.Update(msg)
@@ -316,7 +339,6 @@ func (m *Model) SetSize(width, height int) tea.Cmd {
 	m.Height = height
 	m.fvp.SetWidth(m.contentWidth())
 	m.fvp.SetHeight(m.Height)
-	m.ClearCache()
 	// The header is pre-rendered at a width: without this its rule kept the
 	// old width when the tree was hidden or shown.
 	m.updateHeader()
@@ -332,7 +354,6 @@ func (m *Model) UpdateTheme(styles *common.Styles) tea.Cmd {
 	m.fvp.SetViewportStyles(viewportStyles(m.Styles))
 	m.fvp.SetFilterableViewportStyles(filterableStyles(m.Styles))
 	m.sb.Styles = scrollbarStyles(m.Styles)
-	m.ClearCache()
 	m.updateHeader()
 	return m.diff()
 }
@@ -341,48 +362,31 @@ func (m Model) contentWidth() int {
 	return m.Width - scrollbarWidth
 }
 
+// diff shows the render of what was asked for (file or dir) at the current
+// width, theme and layout: from the cache when it was rendered before, or
+// by starting its render, which supersedes any render still running.
 func (m *Model) diff() tea.Cmd {
-	if m.file != nil {
-		file := m.file.files[0]
-		sideBySide := m.sideBySide && !file.IsNew && !file.IsDelete
-		key := cacheKey(m.file.path, sideBySide)
-		if cached, ok := m.cache[key]; ok && len(cached.diff) != 0 {
-			m.file = cached
-			m.fvp.SetObjects(cached.diff)
-			return nil
-		}
-		node := &cachedNode{
-			path:      m.file.path,
-			files:     m.file.files,
-			additions: m.file.additions,
-			deletions: m.file.deletions,
-		}
-		m.file = node
-		m.cache[key] = node
-		return m.diffFile(node, m.contentWidth())
-	} else if m.dir != nil {
-		key := cacheKey(m.dir.path, m.sideBySide)
-		if cached, ok := m.cache[key]; ok && len(cached.diff) != 0 {
-			m.dir = cached
-			m.fvp.SetObjects(cached.diff)
-			return nil
-		}
-		node := &cachedNode{
-			path:      m.dir.path,
-			files:     m.dir.files,
-			additions: m.dir.additions,
-			deletions: m.dir.deletions,
-		}
-		m.dir = node
-		m.cache[key] = node
-		preamble := ""
-		if m.dir.path == "/" {
-			preamble = m.preamble
-		}
-		return m.diffDir(node, m.contentWidth(), m.sideBySide, preamble)
+	node, dir := m.file, false
+	if node == nil {
+		node, dir = m.dir, true
 	}
+	if node == nil || m.contentWidth() <= 0 || (!dir && len(node.files) != 1) {
+		return nil
+	}
+	key := m.renderKey(node, dir)
+	m.gen++ // whatever is still rendering is no longer wanted
+	if cached, ok := m.cache[key]; ok {
+		m.show(cached)
+		return nil
+	}
+	return m.newRender(node, dir, key).cmd()
+}
 
-	return nil
+// show puts a finished render on screen.
+func (m *Model) show(node *cachedNode) {
+	m.shown = node
+	m.jump = fileJump{} // its file offsets belong to the old render
+	m.fvp.SetObjects(node.diff)
 }
 
 func (m Model) headerView() string {
@@ -430,43 +434,19 @@ func (m Model) dirHeaderView() string {
 
 func (m Model) SetFilePatch(file *gitdiff.File) (Model, tea.Cmd) {
 	m.dir = nil
-
-	fname := filenode.GetFileName(file)
-	sideBySide := m.sideBySide && !file.IsNew && !file.IsDelete
-	key := cacheKey(fname, sideBySide)
-	if cached, ok := m.cache[key]; ok {
-		m.file = cached
-		m.updateHeader()
-		m.fvp.SetObjects(cached.diff)
-		return m, nil
-	}
-
-	files := make([]*gitdiff.File, 1)
-	files[0] = file
 	additions, deletions := filenode.DiffStats(file)
 	m.file = &cachedNode{
-		path:      fname,
-		files:     files,
+		path:      filenode.GetFileName(file),
+		files:     []*gitdiff.File{file},
 		additions: additions,
 		deletions: deletions,
 	}
-	m.cache[key] = m.file
-
 	m.updateHeader()
-	return m, m.diffFile(m.file, m.contentWidth())
+	return m, m.diff()
 }
 
 func (m Model) SetDirPatch(dirPath string, files []*gitdiff.File) (Model, tea.Cmd) {
 	m.file = nil
-
-	key := cacheKey(dirPath, m.sideBySide)
-	if cached, ok := m.cache[key]; ok {
-		m.dir = cached
-		m.updateHeader()
-		m.fvp.SetObjects(cached.diff)
-		return m, nil
-	}
-
 	var added, deleted int64
 	for _, file := range files {
 		na, nd := filenode.DiffStats(file)
@@ -479,13 +459,11 @@ func (m Model) SetDirPatch(dirPath string, files []*gitdiff.File) (Model, tea.Cm
 		additions: added,
 		deletions: deleted,
 	}
-	m.cache[key] = m.dir
-	preamble := ""
 	if dirPath == "/" {
-		preamble = m.preamble
+		m.rootAdded, m.rootDeleted = added, deleted
 	}
 	m.updateHeader()
-	return m, m.diffDir(m.dir, m.contentWidth(), m.sideBySide, preamble)
+	return m, m.diff()
 }
 
 func (m *Model) updateHeader() {
@@ -527,84 +505,6 @@ func (m *Model) ScrollLeft(cols int) {
 func (m *Model) ScrollRight(cols int) {
 	m.fvp.ScrollRight(cols)
 }
-
-func (m *Model) diffFile(node *cachedNode, width int) tea.Cmd {
-	if width == 0 || node == nil || len(node.files) != 1 {
-		return nil
-	}
-
-	file := node.files[0]
-	sideBySide := m.sideBySide && !file.IsNew && !file.IsDelete
-	key := cacheKey(node.path, sideBySide)
-	return func() tea.Msg {
-		args := m.makeDeltaArgs(sideBySide, width, singleFileOpts(file))
-		log.Info("executing delta", "cmd", fmt.Sprintf(`delta %s`, strings.Join(args, " ")))
-		deltac := exec.Command("delta", args...)
-		deltac.Env = deltaEnv(os.Environ(), sideBySide)
-		deltac.Stdin = strings.NewReader(file.String() + "\n")
-		out, err := deltac.Output()
-		if err != nil {
-			return common.ErrMsg{Err: err}
-		}
-
-		return diffContentMsg{cacheKey: key, lines: stringToDiffLines(string(out))}
-	}
-}
-
-func (m *Model) diffDir(dir *cachedNode, width int, sideBySide bool, preamble string) tea.Cmd {
-	if width == 0 || dir == nil {
-		return nil
-	}
-	key := cacheKey(dir.path, sideBySide)
-	return func() tea.Msg {
-		// Each file gets the args its single-file view would (a new or
-		// deleted file is one column, not side-by-side with an empty half),
-		// built here for every kind up front: the renders run in parallel.
-		argsFor := map[dirFileKind][]string{}
-		sbsFor := map[dirFileKind]bool{}
-		for _, kind := range []dirFileKind{dirFileChanged, dirFileNew, dirFileDeleted} {
-			sbs, opts := kind.deltaLayout(sideBySide)
-			argsFor[kind] = m.makeDeltaArgs(sbs, width, opts)
-			sbsFor[kind] = sbs
-		}
-		log.Info("executing delta per file", "cmd", fmt.Sprintf(`delta %s`, strings.Join(argsFor[dirFileChanged], " ")))
-		// One delta per file (in parallel) instead of one for the whole
-		// directory: it tells where each file starts, which the file tree
-		// follows.
-		outs, err := renderFiles(dir.files, func(file *gitdiff.File) (string, error) {
-			kind := dirFileKindOf(file)
-			deltac := exec.Command("delta", argsFor[kind]...)
-			deltac.Env = deltaEnv(os.Environ(), sbsFor[kind])
-			deltac.Stdin = strings.NewReader(file.String() + "\n")
-			out, err := deltac.Output()
-			return string(out), err
-		})
-		if err != nil {
-			if stdErr, ok := err.(*exec.ExitError); ok {
-				return common.ErrMsg{Err: err, Message: string(stdErr.Stderr)}
-			}
-			log.Warn("delta error", "err", err)
-			return common.ErrMsg{Err: err}
-		}
-
-		head := ""
-		if preamble != "" {
-			head = m.renderPreamble(preamble) + "\n"
-		}
-		text, starts := joinFileRenders(head, outs)
-		paths := make([]string, len(dir.files))
-		for i, f := range dir.files {
-			paths[i] = filenode.GetFileName(f)
-		}
-		return diffContentMsg{
-			cacheKey:   key,
-			lines:      stringToDiffLines(text),
-			fileStarts: starts,
-			filePaths:  paths,
-		}
-	}
-}
-
 func (m Model) renderPreamble(preamble string) string {
 	preamble = strings.TrimSpace(preamble)
 	if preamble == "" {
@@ -637,23 +537,15 @@ func (m Model) renderPreamble(preamble string) string {
 	return strings.Join(out, "\n")
 }
 
-type diffContentMsg struct {
-	cacheKey   string
-	lines      []diffLine
-	fileStarts []int
-	filePaths  []string
-}
-
+// ClearCache forgets every render (the diff changed): nothing rendered
+// before, or still rendering, is shown again.
 func (m *Model) ClearCache() {
 	m.cache = make(nodeCache)
+	m.gen++
 }
 
 func (m *Model) RootDiffStats() (int64, int64) {
-	if item, ok := m.cache[cacheKey("/", m.sideBySide)]; ok {
-		return item.additions, item.deletions
-	}
-
-	return 0, 0
+	return m.rootAdded, m.rootDeleted
 }
 
 func (m *Model) Searching() bool {

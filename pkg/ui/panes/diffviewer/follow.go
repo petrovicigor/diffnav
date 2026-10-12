@@ -3,38 +3,7 @@ package diffviewer
 import (
 	"sort"
 	"strings"
-	"sync"
-
-	"github.com/bluekeyes/go-gitdiff/gitdiff"
 )
-
-// maxParallelDeltas caps the delta processes a directory render runs at once.
-const maxParallelDeltas = 8
-
-// renderFiles renders every file with render, at most maxParallelDeltas at a
-// time, and returns the outputs in files' order (or the first error).
-func renderFiles(files []*gitdiff.File, render func(*gitdiff.File) (string, error)) ([]string, error) {
-	outs := make([]string, len(files))
-	errs := make([]error, len(files))
-	sem := make(chan struct{}, maxParallelDeltas)
-	var wg sync.WaitGroup
-	for i, f := range files {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func() {
-			defer wg.Done()
-			defer func() { <-sem }()
-			outs[i], errs[i] = render(f)
-		}()
-	}
-	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return nil, err
-		}
-	}
-	return outs, nil
-}
 
 // joinFileRenders concatenates head (the preamble, "" or ending in a
 // newline) and each file's render into one text, and returns the line each
@@ -62,20 +31,20 @@ func fileIndexAt(starts []int, line int) int {
 	return sort.Search(len(starts), func(i int) bool { return starts[i] > line }) - 1
 }
 
-// fileJump is the last JumpFile: the file it went to, the directory view it
-// was in, and the top line it left the viewport at.
+// fileJump is the last JumpFile: the file it went to, the render it was in
+// (its key), and the top line it left the viewport at.
 type fileJump struct {
-	ok   bool
-	path string
-	idx  int
-	top  int
+	ok  bool
+	key string
+	idx int
+	top int
 }
 
 // currentFileIdx is the file shown at top. A short file at the end of the
 // diff can never reach the top line (the viewport stops at the bottom), so a
 // jump to it stays current for as long as the viewport has not moved since.
-func currentFileIdx(starts []int, top int, j fileJump, path string) int {
-	if j.ok && j.path == path && j.top == top && j.idx >= 0 && j.idx < len(starts) {
+func currentFileIdx(starts []int, top int, j fileJump, key string) int {
+	if j.ok && j.key == key && j.top == top && j.idx >= 0 && j.idx < len(starts) {
 		return j.idx
 	}
 	return fileIndexAt(starts, top)
@@ -103,17 +72,19 @@ func jumpTarget(starts []int, top, cur, delta int) int {
 	return target
 }
 
-// followable is the directory view whose files the tree can follow: nil in
-// a single-file view, before its render landed, or while a filter shows
-// only matching lines (line numbers no longer map to files).
+// followable is the directory render on screen whose files the tree can
+// follow: nil in a single-file view, before the asked-for directory's
+// render landed (the screen still shows another node), or while a filter
+// shows only matching lines (line numbers no longer map to files).
 func (m *Model) followable() *cachedNode {
-	if m.dir == nil || len(m.dir.fileStarts) == 0 {
+	node := m.shown
+	if m.dir == nil || node == nil || !node.isDir || node.path != m.dir.path || len(node.fileStarts) == 0 {
 		return nil
 	}
 	if m.fvp.GetMatchingItemsOnly() && m.Filtering() {
 		return nil
 	}
-	return m.dir
+	return node
 }
 
 func (m *Model) topLine() int {
@@ -131,7 +102,7 @@ func (m *Model) CurrentFilePath() string {
 	if top < 0 {
 		return ""
 	}
-	idx := currentFileIdx(node.fileStarts, top, m.jump, node.path)
+	idx := currentFileIdx(node.fileStarts, top, m.jump, node.key)
 	if idx < 0 || idx >= len(node.filePaths) {
 		return ""
 	}
@@ -155,13 +126,13 @@ func (m *Model) JumpFile(delta int) bool {
 	if top < 0 {
 		return false
 	}
-	cur := currentFileIdx(node.fileStarts, top, m.jump, node.path)
+	cur := currentFileIdx(node.fileStarts, top, m.jump, node.key)
 	target := jumpTarget(node.fileStarts, top, cur, delta)
 	if target < 0 {
 		return false
 	}
 	m.fvp.GoToTop()
 	m.fvp.ScrollDown(node.fileStarts[target])
-	m.jump = fileJump{ok: true, path: node.path, idx: target, top: m.topLine()}
+	m.jump = fileJump{ok: true, key: node.key, idx: target, top: m.topLine()}
 	return true
 }

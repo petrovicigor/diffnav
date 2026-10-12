@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/bluekeyes/go-gitdiff/gitdiff"
 )
 
 func TestJoinFileRenders(t *testing.T) {
@@ -43,7 +41,7 @@ func TestFileIndexAt(t *testing.T) {
 
 func TestCurrentFileIdx_JumpStaysCurrentUntilScroll(t *testing.T) {
 	starts := []int{0, 50, 95} // the last file is too short to reach the top
-	j := fileJump{ok: true, path: "/", idx: 2, top: 80}
+	j := fileJump{ok: true, key: "/", idx: 2, top: 80}
 	if got := currentFileIdx(starts, 80, j, "/"); got != 2 {
 		t.Errorf("right after the jump: got %d, want 2", got)
 	}
@@ -51,7 +49,7 @@ func TestCurrentFileIdx_JumpStaysCurrentUntilScroll(t *testing.T) {
 		t.Errorf("after scrolling: got %d, want 1", got)
 	}
 	if got := currentFileIdx(starts, 80, j, "/app"); got != 1 {
-		t.Errorf("in another directory view: got %d, want 1", got)
+		t.Errorf("in another render: got %d, want 1", got)
 	}
 }
 
@@ -76,33 +74,5 @@ func TestJumpTarget(t *testing.T) {
 			t.Errorf("%s: jumpTarget(top=%d, cur=%d, %+d) = %d, want %d",
 				c.name, c.top, c.cur, c.delta, got, c.want)
 		}
-	}
-}
-
-func TestRenderFilesKeepsOrder(t *testing.T) {
-	files := make([]*gitdiff.File, 30)
-	for i := range files {
-		files[i] = &gitdiff.File{NewName: fmt.Sprintf("f%02d", i)}
-	}
-	outs, err := renderFiles(files, func(f *gitdiff.File) (string, error) {
-		return f.NewName + "\n", nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i, out := range outs {
-		if want := fmt.Sprintf("f%02d\n", i); out != want {
-			t.Fatalf("outs[%d] = %q, want %q", i, out, want)
-		}
-	}
-
-	_, err = renderFiles(files, func(f *gitdiff.File) (string, error) {
-		if f.NewName == "f07" {
-			return "", fmt.Errorf("boom")
-		}
-		return "", nil
-	})
-	if err == nil {
-		t.Fatal("expected the render error")
 	}
 }
