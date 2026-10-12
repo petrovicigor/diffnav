@@ -3,6 +3,7 @@ package diffviewer
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -101,7 +102,17 @@ func (r renderRequest) cmd(ctx context.Context) tea.Cmd {
 	}
 	return func() tea.Msg {
 		outs, err := renderFiles(ctx, len(r.jobs), func(ctx context.Context, i int) (string, error) {
-			return renderJob(ctx, r.jobs[i])
+			out, err := renderJob(ctx, r.jobs[i])
+			if err != nil && ctx.Err() == nil && !errors.Is(err, exec.ErrNotFound) {
+				// One file delta chokes on costs that file, not the view.
+				path := r.path
+				if r.isDir {
+					path = r.paths[i]
+				}
+				log.Warn("delta failed", "file", path, "err", err)
+				return failedRender(path, r.jobs[i].input, err), nil
+			}
+			return out, err
 		})
 		if ctx.Err() != nil {
 			return nil
@@ -262,4 +273,15 @@ func IsRenderMsg(msg tea.Msg) bool {
 		return true
 	}
 	return false
+}
+
+// failedRender stands in for the render of a file delta failed on: a note
+// with delta's complaint, then the file's plain patch.
+func failedRender(path, input string, err error) string {
+	why := err.Error()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+		why, _, _ = strings.Cut(strings.TrimSpace(string(exitErr.Stderr)), "\n")
+	}
+	return fmt.Sprintf("⚠ delta failed on %s: %s\n%s", path, why, input)
 }

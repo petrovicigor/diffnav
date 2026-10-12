@@ -3,6 +3,7 @@ package diffviewer
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -395,4 +396,43 @@ func shownText(m Model) string {
 		lines[i] = l.item.ContentNoAnsi()
 	}
 	return strings.Join(lines, "\n")
+}
+
+// A file delta fails on shows as its plain patch with a note; the other
+// files render, and nothing crashes.
+func TestFailedFileRendersInline(t *testing.T) {
+	useFakeDelta(t)
+	runDelta = func(_ context.Context, job deltaJob) (string, error) {
+		if strings.Contains(job.input, "f1.txt") {
+			return "", fmt.Errorf("exit status 1")
+		}
+		return fakeRender(job), nil
+	}
+	files := testFiles(t, 3, 1)
+	m := newRenderTestModel(t, "tokyo_night", 100, 30)
+	m, cmd := m.SetDirPatch("/", files)
+	msg, ok := runCmd(t, cmd).(diffContentMsg)
+	if !ok {
+		t.Fatalf("one failing file must not fail the view")
+	}
+	m, _ = m.Update(msg)
+	s := shownText(m)
+	for _, want := range []string{"[w=97 dark] +new f0.txt 0", "⚠ delta failed on f1.txt: exit status 1", "+new f1.txt 0", "[w=97 dark] +new f2.txt 0"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in\n%s", want, s)
+		}
+	}
+	if got := m.shown.filePaths[fileIndexAt(m.shown.fileStarts, strings.Count(s[:strings.Index(s, "⚠")], "\n"))]; got != "f1.txt" {
+		t.Errorf("the note should sit at f1.txt's offset, is in %s", got)
+	}
+
+	// No delta at all is still fatal: nothing could render.
+	runDelta = func(context.Context, deltaJob) (string, error) {
+		return "", &exec.Error{Name: "delta", Err: exec.ErrNotFound}
+	}
+	renders.reset()
+	m.ClearCache()
+	if _, ok := runCmd(t, m.SetSideBySide(true)).(common.ErrMsg); !ok {
+		t.Error("a missing delta should be reported as an error")
+	}
 }
