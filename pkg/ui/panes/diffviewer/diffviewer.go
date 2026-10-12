@@ -540,7 +540,7 @@ func (m *Model) diffFile(node *cachedNode, width int) tea.Cmd {
 		args := m.makeDeltaArgs(sideBySide, width, singleFileOpts(file))
 		log.Info("executing delta", "cmd", fmt.Sprintf(`delta %s`, strings.Join(args, " ")))
 		deltac := exec.Command("delta", args...)
-		deltac.Env = os.Environ()
+		deltac.Env = deltaEnv(os.Environ(), sideBySide)
 		deltac.Stdin = strings.NewReader(file.String() + "\n")
 		out, err := deltac.Output()
 		if err != nil {
@@ -561,17 +561,20 @@ func (m *Model) diffDir(dir *cachedNode, width int, sideBySide bool, preamble st
 		// deleted file is one column, not side-by-side with an empty half),
 		// built here for every kind up front: the renders run in parallel.
 		argsFor := map[dirFileKind][]string{}
+		sbsFor := map[dirFileKind]bool{}
 		for _, kind := range []dirFileKind{dirFileChanged, dirFileNew, dirFileDeleted} {
 			sbs, opts := kind.deltaLayout(sideBySide)
 			argsFor[kind] = m.makeDeltaArgs(sbs, width, opts)
+			sbsFor[kind] = sbs
 		}
 		log.Info("executing delta per file", "cmd", fmt.Sprintf(`delta %s`, strings.Join(argsFor[dirFileChanged], " ")))
 		// One delta per file (in parallel) instead of one for the whole
 		// directory: it tells where each file starts, which the file tree
 		// follows.
 		outs, err := renderFiles(dir.files, func(file *gitdiff.File) (string, error) {
-			deltac := exec.Command("delta", argsFor[dirFileKindOf(file)]...)
-			deltac.Env = os.Environ()
+			kind := dirFileKindOf(file)
+			deltac := exec.Command("delta", argsFor[kind]...)
+			deltac.Env = deltaEnv(os.Environ(), sbsFor[kind])
 			deltac.Stdin = strings.NewReader(file.String() + "\n")
 			out, err := deltac.Output()
 			return string(out), err
@@ -822,25 +825,9 @@ func featureDeltaArgs(feature string, sideBySide bool, width int, opts deltaOpts
 }
 
 // makeDeltaArgs are the args delta renders with: the theme's styling and
-// layout, plus (unified only) the config that keeps a gitconfig's
-// side-by-side = true from overriding the layout asked for.
+// layout. A unified render also needs deltaEnv(…, false), which keeps a
+// gitconfig's side-by-side = true from overriding the layout asked for.
 func (m *Model) makeDeltaArgs(sideBySide bool, width int, opts deltaOpts) []string {
-	args := m.themeDeltaArgs(sideBySide, width, opts)
-	if sideBySide {
-		return args
-	}
-	return withConfig(args, unifiedGitconfig())
-}
-
-// withConfig points delta at the gitconfig file path ("" = the default).
-func withConfig(args []string, path string) []string {
-	if path == "" {
-		return args
-	}
-	return append(args, "--config="+path)
-}
-
-func (m *Model) themeDeltaArgs(sideBySide bool, width int, opts deltaOpts) []string {
 	theme := common.Themes.Current()
 	if feature := deltaFeature(theme); feature != "" {
 		return featureDeltaArgs(feature, sideBySide, width, opts)

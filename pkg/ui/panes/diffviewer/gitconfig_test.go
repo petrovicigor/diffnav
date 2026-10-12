@@ -7,40 +7,33 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
-func TestUnifiedGitconfigText(t *testing.T) {
-	got := unifiedGitconfigText("/home/u", "")
-	for _, want := range []string{
-		"path = /home/u/.config/git/config",
-		"path = /home/u/.gitconfig",
-		"[delta]\n\tside-by-side = false\n",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("missing %q in\n%s", want, got)
-		}
+func TestDeltaEnv(t *testing.T) {
+	base := []string{"HOME=/home/u", "PATH=/bin"}
+	if got := deltaEnv(base, true); !slices.Equal(got, base) {
+		t.Errorf("side-by-side must keep the environment: %q", got)
 	}
-	// side-by-side = false must come after the includes to win.
-	if strings.Index(got, "side-by-side") < strings.Index(got, ".gitconfig") {
-		t.Errorf("side-by-side must follow the includes:\n%s", got)
+	want := append(slices.Clone(base), "GIT_CONFIG_PARAMETERS='delta.side-by-side'='false'")
+	if got := deltaEnv(base, false); !slices.Equal(got, want) {
+		t.Errorf("unified: got %q, want %q", got, want)
 	}
-	if got := unifiedGitconfigText("/home/u", "/xdg"); !strings.Contains(got, "path = /xdg/git/config") {
-		t.Errorf("XDG_CONFIG_HOME ignored:\n%s", got)
+	withParams := []string{"GIT_CONFIG_PARAMETERS='core.pager'='less'", "HOME=/home/u"}
+	got := deltaEnv(withParams, false)
+	want = []string{"HOME=/home/u", "GIT_CONFIG_PARAMETERS='core.pager'='less' 'delta.side-by-side'='false'"}
+	if !slices.Equal(got, want) {
+		t.Errorf("existing params must be kept, ours last: got %q, want %q", got, want)
 	}
-}
-
-func TestWithConfig(t *testing.T) {
-	if got := withConfig([]string{"-w=80"}, ""); !slices.Equal(got, []string{"-w=80"}) {
-		t.Errorf("no path: got %q", got)
-	}
-	if got := withConfig([]string{"-w=80"}, "/tmp/x"); !slices.Equal(got, []string{"-w=80", "--config=/tmp/x"}) {
-		t.Errorf("path: got %q", got)
+	if base[0] != "HOME=/home/u" || len(base) != 2 {
+		t.Errorf("deltaEnv must not modify its input: %q", base)
 	}
 }
 
 // A gitconfig with delta.side-by-side = true (the user's) must not make a
-// unified render side-by-side, while its features still load.
-func TestUnifiedGitconfig_BeatsSideBySideInGitconfig(t *testing.T) {
+// unified render side-by-side, while the gitconfig's features still load.
+func TestDeltaEnv_BeatsSideBySideInGitconfig(t *testing.T) {
 	if _, err := exec.LookPath("delta"); err != nil {
 		t.Skip("delta not installed")
 	}
@@ -49,14 +42,18 @@ func TestUnifiedGitconfig_BeatsSideBySideInGitconfig(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(gitconfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := filepath.Join(home, "unified.gitconfig")
-	if err := os.WriteFile(cfg, []byte(unifiedGitconfigText(home, filepath.Join(home, "xdg"))), 0o600); err != nil {
-		t.Fatal(err)
+	// Similar enough that side-by-side pairs them on one row.
+	diff := "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-hello world\n+hello there world\n"
+	environ := []string{
+		"HOME=" + home,
+		"XDG_CONFIG_HOME=" + filepath.Join(home, "xdg"),
+		"GIT_CONFIG_NOSYSTEM=1",
+		"PATH=" + os.Getenv("PATH"),
 	}
-	diff := "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n"
-	run := func(args ...string) string {
-		cmd := exec.Command("delta", append([]string{"--paging=never", "--line-numbers", "--features=probe", "-w=60"}, args...)...)
-		cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(home, "xdg"))
+	run := func(env []string, args ...string) string {
+		cmd := exec.Command("delta", append([]string{"--paging=never", "--features=probe", "-w=100"}, args...)...)
+		cmd.Env = env
+		cmd.Dir = home // no repo config
 		cmd.Stdin = strings.NewReader(diff)
 		out, err := cmd.Output()
 		if err != nil {
@@ -64,40 +61,26 @@ func TestUnifiedGitconfig_BeatsSideBySideInGitconfig(t *testing.T) {
 		}
 		return string(out)
 	}
-	// Side-by-side draws the removed line as "│  1 │old   │    │" (two
-	// panels, four bars); unified draws one number column, one bar.
-	sideBySideLine := func(out string) bool {
-		for l := range strings.SplitSeq(out, "\n") {
-			if strings.Contains(l, "old") && strings.Count(l, "│") >= 3 {
+	// Side-by-side puts the old and the new line on one row.
+	sideBySide := func(out string) bool {
+		for l := range strings.SplitSeq(ansi.Strip(out), "\n") {
+			if strings.Contains(l, "hello world") && strings.Contains(l, "hello there world") {
 				return true
 			}
 		}
 		return false
 	}
-	if !sideBySideLine(run()) {
+	if !sideBySide(run(environ)) {
 		t.Fatal("precondition: the probe gitconfig should make delta side-by-side")
 	}
-	out := run("--config=" + cfg)
-	if sideBySideLine(out) {
-		t.Errorf("unified config still renders side-by-side:\n%s", out)
+	out := run(deltaEnv(environ, false))
+	if sideBySide(out) {
+		t.Errorf("unified env still renders side-by-side:\n%s", out)
 	}
 	if !strings.Contains(out, "PROBE") {
-		t.Errorf("features from the included gitconfig were lost:\n%s", out)
+		t.Errorf("features from the gitconfig were lost:\n%s", out)
 	}
-	if !sideBySideLine(run("--config="+cfg, "--side-by-side")) {
-		t.Error("--side-by-side must still win over the unified config")
-	}
-}
-
-func TestUnifiedGitconfigPath_NamedByContent(t *testing.T) {
-	a := unifiedGitconfigPath("/tmp", unifiedGitconfigText("/home/a", ""))
-	if a != unifiedGitconfigPath("/tmp", unifiedGitconfigText("/home/a", "")) {
-		t.Error("same content must reuse one file")
-	}
-	if a == unifiedGitconfigPath("/tmp", unifiedGitconfigText("/home/b", "")) {
-		t.Error("another home must get its own file")
-	}
-	if filepath.Dir(a) != "/tmp" || !strings.HasPrefix(filepath.Base(a), "diffnav-unified-") {
-		t.Errorf("unexpected path %q", a)
+	if !sideBySide(run(deltaEnv(environ, false), "--side-by-side")) {
+		t.Error("--side-by-side must still win over the unified env")
 	}
 }
