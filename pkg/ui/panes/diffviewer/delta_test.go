@@ -1,6 +1,7 @@
 package diffviewer
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -198,5 +199,39 @@ func TestDirFileKind_NewAndDeletedFilesAreOneColumn(t *testing.T) {
 	}
 	if sbs, _ := dirFileKindOf(&gitdiff.File{OldName: "a", NewName: "a"}).deltaLayout(false); sbs {
 		t.Error("unified mode must stay unified")
+	}
+}
+
+func TestMixHex(t *testing.T) {
+	black, white := common.TintMiasmaDark.Black, common.TintMiasmaLight.Bg
+	if got := mixHex(black, white, 0); got != common.LipglossColorToHex(black) {
+		t.Errorf("t=0: %s", got)
+	}
+	if got := mixHex(white, black, 0); got != common.LipglossColorToHex(white) {
+		t.Errorf("t=0 other way: %s", got)
+	}
+}
+
+// Miasma light's fallback diff backgrounds stay light (a tint of the
+// parchment), not the near-black the darkened colours give.
+func TestMakeDeltaArgs_MiasmaLightFallbackKeepsLightBackgrounds(t *testing.T) {
+	pinDeltaFeatures(t, false)
+	common.RegisterSupportedTints()
+	common.Themes.SetTintID("miasma_light")
+	t.Cleanup(func() { common.Themes.SetTintID("tokyo_night") })
+	styles := common.MakeStyles()
+	m := New(false, &styles)
+	for _, a := range m.makeDeltaArgs(false, 100, deltaOpts{}) {
+		for _, flag := range []string{"--plus-style=", "--minus-style=", "--plus-emph-style=", "--minus-emph-style="} {
+			if !strings.HasPrefix(a, flag) {
+				continue
+			}
+			hex := a[strings.Index(a, "#")+1 : strings.Index(a, "#")+7]
+			var r, g, b int
+			fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b)
+			if lum := (299*r + 587*g + 114*b) / 1000; lum < 128 {
+				t.Errorf("%s background #%s is dark (luma %d) on the light theme", flag, hex, lum)
+			}
+		}
 	}
 }

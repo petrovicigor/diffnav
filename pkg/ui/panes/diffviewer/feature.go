@@ -2,6 +2,8 @@ package diffviewer
 
 import (
 	"bytes"
+	"fmt"
+	"image/color"
 	"os/exec"
 	"regexp"
 	"sync"
@@ -35,4 +37,14 @@ func gitHasDeltaFeature(name string) bool {
 	}
 	deltaFeatures.Store(name, found)
 	return found
+}
+
+// mixHex is the colour t of the way from a to b, as #rrggbb.
+func mixHex(a, b color.Color, t float64) string {
+	ar, ag, ab, _ := a.RGBA()
+	br, bg, bb, _ := b.RGBA()
+	mix := func(x, y uint32) uint8 {
+		return uint8((float64(x>>8)*(1-t) + float64(y>>8)*t) + 0.5)
+	}
+	return fmt.Sprintf("#%02x%02x%02x", mix(ar, br), mix(ag, bg), mix(ab, bb))
 }

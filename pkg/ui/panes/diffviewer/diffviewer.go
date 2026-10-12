@@ -803,6 +803,12 @@ func (m *Model) makeDeltaArgs(sideBySide bool, width int, opts deltaOpts) []stri
 	minusLine := common.LipglossColorToHex(theme.BrightRed)
 	red := common.LipglossColorToHex(lipgloss.Darken(theme.Red, 0.8))
 	brightRed := common.LipglossColorToHex(lipgloss.Darken(theme.BrightRed, 0.5))
+	if common.IsMiasma(theme) && !theme.Dark {
+		// Darkened backgrounds are near-black on the parchment: tint the
+		// background instead (Miasma light without its delta feature).
+		green, brightGreen = mixHex(theme.Bg, theme.Green, 0.2), mixHex(theme.Bg, theme.BrightGreen, 0.35)
+		red, brightRed = mixHex(theme.Bg, theme.Red, 0.2), mixHex(theme.Bg, theme.BrightRed, 0.35)
+	}
 	args := []string{
 		"--paging=never",
 		"--line-numbers",
