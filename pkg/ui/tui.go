@@ -41,6 +41,12 @@ const (
 	headerHeight  = 2
 	searchHeight  = 3
 
+	// Panel margin (ModelOpts.Panel): a blank row above and below, two
+	// columns each side, so a borderless floating pane reads as a panel on
+	// its backdrop instead of rules running into the window behind it.
+	panelPadV = 1
+	panelPadH = 2
+
 	// Zone IDs for bubblezone click detection.
 	zoneSearchBox     = "searchbox"
 	zoneFileTree      = "filetree"
@@ -108,11 +114,15 @@ type mainModel struct {
 	// autoMiasma: the Miasma theme with no MIASMA_MODE, so the terminal's
 	// background (BackgroundColorMsg) picks dark or light.
 	autoMiasma bool
+	// panel: draw inside a panelPadV × panelPadH margin. width and height
+	// are the area inside it; mouse X/Y and overlay positions are not.
+	panel bool
 }
 
 type ModelOpts struct {
 	Input string
 	PRUrl string
+	Panel bool
 }
 
 func New(opts ModelOpts, cfg config.Config) mainModel {
@@ -144,6 +154,7 @@ func New(opts ModelOpts, cfg config.Config) mainModel {
 		styles:            common.MakeStyles(),
 		lastTheme:         common.Themes.Current(),
 		autoMiasma:        autoMiasma,
+		panel:             opts.Panel,
 	}
 	m.fileTree = filetree.New(cfg, &m.styles)
 	m.fileTree.SetSize(cfg.UI.FileTreeWidth, 0)
@@ -515,8 +526,9 @@ func (m mainModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		log.Info("got tea.WindowSizeMsg", "width", msg.Width, "height", msg.Height)
 		m.help.Update(msg)
-		m.width = msg.Width
-		m.height = msg.Height
+		padV, padH := m.pads()
+		m.width = max(msg.Width-2*padH, 0)
+		m.height = max(msg.Height-2*padV, 0)
 		dfCmd := m.diffViewer.SetSize(m.width-m.sidebarWidth(), m.mainContentHeight())
 		m.themePicker.SetSize(msg.Width/3, int(float32(msg.Height)*(2.0/3.0)))
 		cmds = append(cmds, dfCmd)
@@ -778,7 +790,12 @@ func (m mainModel) View() tea.View {
 		sections = append(sections, m.footerView())
 	}
 
-	appView := zone.Scan(lipgloss.JoinVertical(lipgloss.Left, sections...))
+	app := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	if padV, padH := m.pads(); padV+padH > 0 {
+		app = lipgloss.NewStyle().Padding(padV, padH).Render(app)
+	}
+	// Scanned after the margin, so zones hold screen coordinates.
+	appView := zone.Scan(app)
 	layers := []*lipgloss.Layer{
 		lipgloss.NewLayer(appView),
 	}
@@ -1280,14 +1297,29 @@ type overlayResult struct {
 
 // renderOverlay renders content with the overlay style and returns the
 // rendered string and its position.
+// pads is the panel margin: rows above/below, columns left/right.
+func (m mainModel) pads() (v, h int) {
+	if !m.panel {
+		return 0, 0
+	}
+	return panelPadV, panelPadH
+}
+
+// innerX turns a screen column into one inside the panel margin.
+func (m mainModel) innerX(x int) int {
+	_, h := m.pads()
+	return x - h
+}
+
 func (m mainModel) renderOverlay(content string) overlayResult {
 	rendered := overlayStyle().Render(content)
 	w := lipgloss.Width(rendered)
 	h := lipgloss.Height(rendered)
+	padV, padH := m.pads()
 	return overlayResult{
 		rendered: rendered,
-		col:      max(0, m.width/2-w/2),
-		row:      max(0, m.height/4-2),
+		col:      padH + max(0, m.width/2-w/2),
+		row:      padV + max(0, m.height/4-2),
 		width:    w,
 		height:   h,
 	}
@@ -1338,13 +1370,14 @@ func (m mainModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if msg.Button == tea.MouseLeft {
 			// Keep coordinate check for resize border (hybrid approach).
 			sidebarWidth := m.sidebarWidth()
+			x := m.innerX(msg.X)
 			if !m.searchingFiles && m.isShowingFileTree &&
-				abs(msg.X-sidebarWidth) <= sidebarGrabThreshold {
+				abs(x-sidebarWidth) <= sidebarGrabThreshold {
 				m.draggingSidebar = true
 				return m, nil
 			}
 			// Allow grabbing the line when sidebar is hidden.
-			if !m.isSidebarVisible() && msg.X <= sidebarGrabThreshold {
+			if !m.isSidebarVisible() && x <= sidebarGrabThreshold {
 				m.draggingSidebar = true
 				m.isShowingFileTree = true
 				return m, nil
@@ -1497,7 +1530,8 @@ func (m mainModel) handleSidebarDrag(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Hide sidebar if dragged below threshold.
-	if msg.Mouse().X < sidebarHideWidth {
+	x := m.innerX(msg.Mouse().X)
+	if x < sidebarHideWidth {
 		m.isShowingFileTree = false
 		m.draggingSidebar = false
 		cmd := m.diffViewer.SetSize(m.width, m.mainContentHeight())
@@ -1507,7 +1541,7 @@ func (m mainModel) handleSidebarDrag(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// Clamp to reasonable bounds.
 	minWidth := sidebarMinWidth
 	maxWidth := m.width / 2
-	newWidth := max(minWidth, min(maxWidth, msg.Mouse().X))
+	newWidth := max(minWidth, min(maxWidth, x))
 
 	// TODO: for some reason setting a value smaller than minResizeStep
 	// will garble up the output when resizing. I have no idea why.

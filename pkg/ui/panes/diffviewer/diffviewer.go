@@ -204,11 +204,9 @@ func New(sideBySide bool, styles *common.Styles) Model {
 			),
 			filterableviewport.WithPlaceholderText[diffLine]("type to search…"),
 			filterableviewport.WithItemDescriptor[diffLine]("lines"),
-			filterableviewport.WithEmptyText[diffLine](
-				"Search… "+lipgloss.NewStyle().
-					Faint(true).
-					Render("(/ insensitive ⋅ ⌃+s exact ⋅ ⌃+r regex ⋅ ⌃+f fuzzy)"),
-			),
+			// No idle hint: the row stays (the filter line is always
+			// reserved) but blank until / opens a search; ? lists the modes.
+			filterableviewport.WithEmptyText[diffLine](""),
 			filterableviewport.WithFilterLinePosition[diffLine](filterableviewport.FilterLineTop),
 			filterableviewport.WithMatchingItemsOnly[diffLine](false),
 			filterableviewport.WithCanToggleMatchingItemsOnly[diffLine](true),
@@ -775,6 +773,17 @@ var featureHeaderArgs = []string{
 	"--hunk-header-style=line-number syntax",
 }
 
+// hunkRuleColor is the faint rule drawn above each hunk header. The feature's
+// own "box ul" draws a box with no left side plus an underline across the
+// pane, which reads as broken chrome inside diffnav's frame; one full-width
+// rule in the separators' faint colour reads as a section break instead.
+func hunkRuleColor(feature string) string {
+	if feature == "miasma-light" {
+		return "#c8bd9f"
+	}
+	return "#3a352d"
+}
+
 // featureDeltaArgs runs delta with feature for every colour and style,
 // passing only layout: no pager, line numbers (one column for new / deleted
 // files), tab width, no wrap symbols, the pane's width, no wrapping limit,
@@ -794,6 +803,7 @@ func featureDeltaArgs(feature string, sideBySide bool, width int, opts deltaOpts
 		"--wrap-max-lines=unlimited",
 	}
 	args = append(args, featureHeaderArgs...)
+	args = append(args, "--hunk-header-decoration-style="+hunkRuleColor(feature)+" ol")
 	if opts.OmitFileHeader {
 		args = append(args, "--file-style=omit")
 	}

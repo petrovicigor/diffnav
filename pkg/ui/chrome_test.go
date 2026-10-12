@@ -101,8 +101,9 @@ func TestChrome_HeaderRuleJoinsSeparator(t *testing.T) {
 		if rule < 0 {
 			t.Fatalf("tree=%v: no ├ joint in\n%s", tree, strings.Join(rows, "\n"))
 		}
-		if !strings.Contains(rows[rule+1], "Search…") {
-			t.Errorf("tree=%v: the joint should sit on the header rule above the search line, row %d: %q", tree, rule, rows[rule])
+		// The search line under the header rule is blank until / (no hint).
+		if search := []rune(rows[rule+1]); len(search) > col+1 && strings.TrimSpace(string(search[col+1:])) != "" {
+			t.Errorf("tree=%v: the joint should sit on the header rule above a blank search line, row %d: %q", tree, rule+1, rows[rule+1])
 		}
 		line := []rune(rows[rule])
 		joint := slices.Index(line, '├')
@@ -115,5 +116,35 @@ func TestChrome_HeaderRuleJoinsSeparator(t *testing.T) {
 		if strings.Contains(string(line[joint+1:]), "│") {
 			t.Errorf("tree=%v: the scrollbar must not cut the header rule: %q", tree, rows[rule])
 		}
+	}
+}
+
+// --panel draws everything inside a blank margin and still fills the window
+// exactly: a blank first and last row, two blank columns each side.
+func TestChrome_PanelMargin(t *testing.T) {
+	m := newTestMainModel(t)
+	m.panel = true
+	rows := chromeRows(t, m, 120, 30)
+	if len(rows) != 30 {
+		t.Fatalf("view is %d rows, want the window's 30", len(rows))
+	}
+	for _, i := range []int{0, len(rows) - 1} {
+		if strings.TrimSpace(rows[i]) != "" {
+			t.Errorf("row %d should be margin: %q", i, rows[i])
+		}
+	}
+	for i, r := range rows {
+		if w := ansi.StringWidth(r); w > 120 {
+			t.Errorf("row %d is %d wide, window is 120: %q", i, w, r)
+		}
+		if strings.TrimSpace(ansi.Truncate(r, panelPadH, "")) != "" {
+			t.Errorf("row %d draws into the left margin: %q", i, r)
+		}
+		if w := ansi.StringWidth(r); w > 120-panelPadH && strings.TrimSpace(ansi.Cut(r, 120-panelPadH, 120)) != "" {
+			t.Errorf("row %d draws into the right margin: %q", i, r)
+		}
+	}
+	if top := []rune(rows[1]); len(top) <= panelPadH || top[panelPadH] != '─' {
+		t.Errorf("the top rule should start at the margin: %q", rows[1])
 	}
 }

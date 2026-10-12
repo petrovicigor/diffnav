@@ -92,6 +92,7 @@ func init() {
 	rootCmd.Flags().String("watch-cmd", "git diff", "Command to run in watch mode")
 	rootCmd.Flags().Duration("watch-interval", 2*time.Second, "Interval between watch refreshes")
 	rootCmd.Flags().String("pr", "", "load a PR")
+	rootCmd.Flags().Bool("panel", false, "Draw inside a blank margin (for borderless floating panes)")
 
 	rootCmd.SetVersionTemplate("\n" + logo + "\n" + `{{printf "version %s\n" .Version}}`)
 
@@ -129,6 +130,10 @@ func init() {
 		prURL, err := cmd.Flags().GetString("pr")
 		if err != nil {
 			log.Fatal("Cannot parse the pr flag", err)
+		}
+		panelFlag, err := cmd.Flags().GetBool("panel")
+		if err != nil {
+			log.Fatal("Cannot parse the panel flag", err)
 		}
 
 		zone.NewGlobal()
@@ -232,7 +237,7 @@ func init() {
 			log.Fatal(err)
 		}
 		p := tea.NewProgram(
-			ui.New(ui.ModelOpts{Input: input, PRUrl: prURL}, cfg),
+			ui.New(ui.ModelOpts{Input: input, PRUrl: prURL, Panel: panelFlag}, cfg),
 			tea.WithInput(ttyIn),
 		)
 

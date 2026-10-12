@@ -29,6 +29,9 @@ func TestMakeDeltaArgs_MiasmaUsesGitconfigFeature(t *testing.T) {
 				if slices.Contains(featureHeaderArgs, a) {
 					continue // header text, no colour
 				}
+				if a == "--hunk-header-decoration-style="+hunkRuleColor(feature)+" ol" {
+					continue // the one deliberate override: diffnav's own rule
+				}
 				flag, _, _ := strings.Cut(a, "=")
 				if strings.HasSuffix(flag, "-style") || strings.HasSuffix(flag, "-label") ||
 					flag == "--syntax-theme" || flag == "--dark" || flag == "--light" {
