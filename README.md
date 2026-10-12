@@ -192,7 +192,8 @@ ui:
   # shown below each theme name. "miasma" (the default) picks miasma_dark or
   # miasma_light from $MIASMA_MODE, else the terminal background, else dark;
   # Miasma styles the diff with the miasma-dark / miasma-light delta features
-  # from your gitconfig.
+  # from your gitconfig, or with diffnav's own delta styling when those
+  # features are not defined.
   theme: gruvbox_dark
 ```
 
