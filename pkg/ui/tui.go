@@ -592,11 +592,6 @@ func (m mainModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.commitBranch = msg.branch
 		prevHeader := m.headerHeight()
 		m.cachedMeta = m.parseCommitMeta()
-		if m.headerHeight() != prevHeader && m.height > 0 {
-			// The header comes and goes with commit info; resize under it.
-			m.fileTree.SetSize(m.sidebarWidth(), m.mainContentHeight()-searchHeight)
-			cmds = append(cmds, m.diffViewer.SetSize(m.width-m.sidebarWidth(), m.mainContentHeight()))
-		}
 		m.diffViewer.SetPreamble(m.preamble)
 		m.diffViewer, cmd = m.diffViewer.SetDirPatch("/", m.fileTree.GetCurrNodeDesendantDiffs())
 		cmds = append(cmds, cmd)
@@ -606,6 +601,12 @@ func (m mainModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m, cmd = m.setNodeDiff(node)
 			cmds = append(cmds, cmd)
 			m.pendingCursorPath = ""
+		}
+		// The header comes and goes with commit info; resize under it. After
+		// the new diff is set: resizing first re-rendered the old one.
+		if m.headerHeight() != prevHeader && m.height > 0 {
+			m.fileTree.SetSize(m.sidebarWidth(), m.mainContentHeight()-searchHeight)
+			cmds = append(cmds, m.diffViewer.SetSize(m.width-m.sidebarWidth(), m.mainContentHeight()))
 		}
 
 	case common.ErrMsg:

@@ -436,3 +436,34 @@ func TestFailedFileRendersInline(t *testing.T) {
 		t.Error("a missing delta should be reported as an error")
 	}
 }
+
+// A watch reload whose new output gains a commit header: the viewer is
+// cleared, resized (the header takes rows) and given the new diff, in
+// either order; the new diff must be what lands.
+func TestWatchReloadWithHeaderChangeShowsNewDiff(t *testing.T) {
+	for _, resizeFirst := range []bool{true, false} {
+		useFakeDelta(t)
+		m := newRenderTestModel(t, "tokyo_night", 100, 30)
+		m, cmd := m.SetDirPatch("/", testFiles(t, 2, 1))
+		m = land(t, m, cmd)
+
+		newFiles := testFiles(t, 4, 1)
+		m.ClearCache()
+		m.SetPreamble("commit abc123")
+		var cmds []tea.Cmd
+		if resizeFirst {
+			cmds = append(cmds, m.SetSize(100, 27))
+		}
+		m, cmd = m.SetDirPatch("/", newFiles)
+		cmds = append(cmds, cmd)
+		if !resizeFirst {
+			cmds = append(cmds, m.SetSize(100, 27))
+		}
+		for _, c := range cmds {
+			m = land(t, m, c)
+		}
+		if s := shownText(m); !strings.Contains(s, "f3.txt") || !strings.Contains(s, "commit abc123") {
+			t.Errorf("resizeFirst=%v: the old diff is still shown:\n%s", resizeFirst, s)
+		}
+	}
+}
