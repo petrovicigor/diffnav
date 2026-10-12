@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bluekeyes/go-gitdiff/gitdiff"
+
 	"github.com/dlvhdr/diffnav/pkg/ui/common"
 )
 
@@ -24,6 +26,9 @@ func TestMakeDeltaArgs_MiasmaUsesGitconfigFeature(t *testing.T) {
 				t.Errorf("%s %+v: missing --features=%s in %q", id, opts, feature, args)
 			}
 			for _, a := range args {
+				if slices.Contains(featureHeaderArgs, a) {
+					continue // header text, no colour
+				}
 				flag, _, _ := strings.Cut(a, "=")
 				if strings.HasSuffix(flag, "-style") || strings.HasSuffix(flag, "-label") ||
 					flag == "--syntax-theme" || flag == "--dark" || flag == "--light" {
@@ -36,6 +41,56 @@ func TestMakeDeltaArgs_MiasmaUsesGitconfigFeature(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestFeatureHeaderArgs_NoColourNoNavigateMarkers(t *testing.T) {
+	for _, a := range featureHeaderArgs {
+		flag, val, _ := strings.Cut(a, "=")
+		switch {
+		case strings.HasSuffix(flag, "-label"):
+			if val != "" {
+				t.Errorf("%s: labels must be empty (no Δ / added: / •), got %q", flag, val)
+			}
+		case flag == "--hunk-header-style":
+			if val != "line-number syntax" {
+				t.Errorf("hunk header must be line number + code only (no file, no colour), got %q", val)
+			}
+		default:
+			t.Errorf("unexpected header arg %q", a)
+		}
+	}
+	for _, label := range []string{"modified", "added", "removed", "renamed", "copied"} {
+		if !slices.Contains(featureHeaderArgs, "--file-"+label+"-label=") {
+			t.Errorf("navigate's %s label is not cleared", label)
+		}
+	}
+}
+
+func TestSingleFileOpts_OmitFileHeaderUnlessRenamed(t *testing.T) {
+	cases := []struct {
+		file *gitdiff.File
+		omit bool
+	}{
+		{&gitdiff.File{OldName: "a.go", NewName: "a.go"}, true},
+		{&gitdiff.File{NewName: "a.go", IsNew: true}, true},
+		{&gitdiff.File{OldName: "a.go", IsDelete: true}, true},
+		{&gitdiff.File{OldName: "a.go", NewName: "b.go", IsRename: true}, false},
+		{&gitdiff.File{OldName: "a.go", NewName: "b.go", IsCopy: true}, false},
+	}
+	for _, c := range cases {
+		opts := singleFileOpts(c.file)
+		if opts.OmitFileHeader != c.omit {
+			t.Errorf("%s→%s: OmitFileHeader = %v, want %v", c.file.OldName, c.file.NewName, opts.OmitFileHeader, c.omit)
+		}
+		args := featureDeltaArgs("miasma-dark", true, 100, opts)
+		if got := slices.Contains(args, "--file-style=omit"); got != c.omit {
+			t.Errorf("%s→%s: --file-style=omit present = %v, want %v", c.file.OldName, c.file.NewName, got, c.omit)
+		}
+	}
+	// A directory view keeps every file's header.
+	if slices.Contains(featureDeltaArgs("miasma-dark", true, 100, deltaOpts{}), "--file-style=omit") {
+		t.Error("directory view must keep delta's file headers")
 	}
 }
 

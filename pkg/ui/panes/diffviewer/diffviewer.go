@@ -484,11 +484,7 @@ func (m *Model) diffFile(node *cachedNode, width int) tea.Cmd {
 	sideBySide := m.sideBySide && !file.IsNew && !file.IsDelete
 	key := cacheKey(node.path, sideBySide)
 	return func() tea.Msg {
-		args := m.makeDeltaArgs(
-			sideBySide,
-			width,
-			deltaOpts{IsNew: file.IsNew, IsDelete: file.IsDelete},
-		)
+		args := m.makeDeltaArgs(sideBySide, width, singleFileOpts(file))
 		log.Info("executing delta", "cmd", fmt.Sprintf(`delta %s`, strings.Join(args, " ")))
 		deltac := exec.Command("delta", args...)
 		deltac.Env = os.Environ()
@@ -635,6 +631,19 @@ func stringToDiffLines(val string) []diffLine {
 type deltaOpts struct {
 	IsNew    bool
 	IsDelete bool
+	// OmitFileHeader drops delta's file header: the single-file view already
+	// names the file in its own header.
+	OmitFileHeader bool
+}
+
+// singleFileOpts are the delta options for file shown on its own. A rename or
+// copy keeps delta's file header, the only place "old ⟶ new" is shown.
+func singleFileOpts(file *gitdiff.File) deltaOpts {
+	return deltaOpts{
+		IsNew:          file.IsNew,
+		IsDelete:       file.IsDelete,
+		OmitFileHeader: !file.IsRename && !file.IsCopy,
+	}
 }
 
 // deltaFeature is the gitconfig delta feature that styles the diff for
@@ -650,10 +659,32 @@ func deltaFeature(theme *tint.Tint) string {
 	return "miasma-light"
 }
 
+// featureHeaderArgs shape delta's file and hunk headers for a pane that is
+// not a pager. Text only, no colours: the feature still styles both.
+//
+//   - Empty file labels: navigate=true (gitconfig) prefixes every file
+//     header with "Δ" / "added:" / "removed:" / "renamed:", markers for
+//     less's n/N that mean nothing here (the tree shows the file's status).
+//     A rename still reads "old ⟶ new".
+//   - Empty hunk label: navigate's "•" before each hunk header, same reason.
+//   - Hunk headers without the file: the file header right above already
+//     names it, so "line-number syntax" (the feature's "file line-number
+//     syntax" minus the path) keeps only the line and the code context.
+var featureHeaderArgs = []string{
+	"--file-modified-label=",
+	"--file-added-label=",
+	"--file-removed-label=",
+	"--file-renamed-label=",
+	"--file-copied-label=",
+	"--hunk-label=",
+	"--hunk-header-style=line-number syntax",
+}
+
 // featureDeltaArgs runs delta with feature for every colour and style,
 // passing only layout: no pager, line numbers (one column for new / deleted
 // files), tab width, no wrap symbols, the pane's width, no wrapping limit,
-// and side-by-side when asked.
+// side-by-side when asked, and the header shape (featureHeaderArgs; no file
+// header at all with OmitFileHeader).
 func featureDeltaArgs(feature string, sideBySide bool, width int, opts deltaOpts) []string {
 	args := []string{
 		"--features=" + feature,
@@ -666,6 +697,10 @@ func featureDeltaArgs(feature string, sideBySide bool, width int, opts deltaOpts
 		fmt.Sprintf("-w=%d", width),
 		"--max-line-length=0",
 		"--wrap-max-lines=unlimited",
+	}
+	args = append(args, featureHeaderArgs...)
+	if opts.OmitFileHeader {
+		args = append(args, "--file-style=omit")
 	}
 	switch {
 	case opts.IsNew:
