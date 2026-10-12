@@ -510,8 +510,9 @@ func (m mainModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.BackgroundColorMsg:
-		if m.autoMiasma {
-			m.autoMiasma = false
+		// Auto until the theme picker is used: a reply arriving late (or
+		// while the picker is open) must not override what was picked.
+		if m.autoMiasma && !m.themePickerOpen {
 			id := common.MiasmaThemeForMode("dark")
 			if !msg.IsDark() {
 				id = common.MiasmaThemeForMode("light")
@@ -523,10 +524,12 @@ func (m mainModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case themepicker.ThemePreviewMsg:
+		m.autoMiasma = false
 		cmds = append(cmds, m.onThemeChanged(msg.Theme.ID))
 
 	case themepicker.ThemeChosenMsg:
 		m.themePickerOpen = false
+		m.autoMiasma = false
 		m.lastTheme = msg.Theme
 		cmds = append(cmds, m.onThemeChanged(msg.Theme.ID))
 		return m, tea.Batch(cmds...)
