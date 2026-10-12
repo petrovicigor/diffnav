@@ -504,13 +504,20 @@ func (m *Model) diffDir(dir *cachedNode, width int, sideBySide bool, preamble st
 	}
 	key := cacheKey(dir.path, sideBySide)
 	return func() tea.Msg {
-		args := m.makeDeltaArgs(sideBySide, width, deltaOpts{})
-		log.Info("executing delta per file", "cmd", fmt.Sprintf(`delta %s`, strings.Join(args, " ")))
+		// Each file gets the args its single-file view would (a new or
+		// deleted file is one column, not side-by-side with an empty half),
+		// built here for every kind up front: the renders run in parallel.
+		argsFor := map[dirFileKind][]string{}
+		for _, kind := range []dirFileKind{dirFileChanged, dirFileNew, dirFileDeleted} {
+			sbs, opts := kind.deltaLayout(sideBySide)
+			argsFor[kind] = m.makeDeltaArgs(sbs, width, opts)
+		}
+		log.Info("executing delta per file", "cmd", fmt.Sprintf(`delta %s`, strings.Join(argsFor[dirFileChanged], " ")))
 		// One delta per file (in parallel) instead of one for the whole
-		// directory: the concatenated output is the same, and it tells
-		// where each file starts, which the file tree follows.
+		// directory: it tells where each file starts, which the file tree
+		// follows.
 		outs, err := renderFiles(dir.files, func(file *gitdiff.File) (string, error) {
-			deltac := exec.Command("delta", args...)
+			deltac := exec.Command("delta", argsFor[dirFileKindOf(file)]...)
 			deltac.Env = os.Environ()
 			deltac.Stdin = strings.NewReader(file.String() + "\n")
 			out, err := deltac.Output()
@@ -636,6 +643,39 @@ type deltaOpts struct {
 	OmitFileHeader bool
 }
 
+// dirFileKind is how a file in a directory view is laid out by delta.
+type dirFileKind int
+
+const (
+	dirFileChanged dirFileKind = iota
+	dirFileNew
+	dirFileDeleted
+)
+
+func dirFileKindOf(file *gitdiff.File) dirFileKind {
+	switch {
+	case file.IsNew:
+		return dirFileNew
+	case file.IsDelete:
+		return dirFileDeleted
+	}
+	return dirFileChanged
+}
+
+// deltaLayout is the side-by-side switch and options for a file of kind in
+// a directory view: the same as its single-file view, so a new or deleted
+// file is one column (not a side-by-side with an empty half), but keeping
+// its file header.
+func (k dirFileKind) deltaLayout(sideBySide bool) (bool, deltaOpts) {
+	switch k {
+	case dirFileNew:
+		return false, deltaOpts{IsNew: true}
+	case dirFileDeleted:
+		return false, deltaOpts{IsDelete: true}
+	}
+	return sideBySide, deltaOpts{}
+}
+
 // singleFileOpts are the delta options for file shown on its own. A rename or
 // copy keeps delta's file header, the only place "old ⟶ new" is shown.
 func singleFileOpts(file *gitdiff.File) deltaOpts {
@@ -716,7 +756,26 @@ func featureDeltaArgs(feature string, sideBySide bool, width int, opts deltaOpts
 	return args
 }
 
+// makeDeltaArgs are the args delta renders with: the theme's styling and
+// layout, plus (unified only) the config that keeps a gitconfig's
+// side-by-side = true from overriding the layout asked for.
 func (m *Model) makeDeltaArgs(sideBySide bool, width int, opts deltaOpts) []string {
+	args := m.themeDeltaArgs(sideBySide, width, opts)
+	if sideBySide {
+		return args
+	}
+	return withConfig(args, unifiedGitconfig())
+}
+
+// withConfig points delta at the gitconfig file path ("" = the default).
+func withConfig(args []string, path string) []string {
+	if path == "" {
+		return args
+	}
+	return append(args, "--config="+path)
+}
+
+func (m *Model) themeDeltaArgs(sideBySide bool, width int, opts deltaOpts) []string {
 	theme := common.Themes.Current()
 	if feature := deltaFeature(theme); feature != "" {
 		return featureDeltaArgs(feature, sideBySide, width, opts)

@@ -109,3 +109,27 @@ func TestMakeDeltaArgs_OtherThemesKeepDiffnavStyling(t *testing.T) {
 		t.Fatalf("non-Miasma theme lost its syntax theme: %q", args)
 	}
 }
+
+func TestDirFileKind_NewAndDeletedFilesAreOneColumn(t *testing.T) {
+	cases := []struct {
+		file     *gitdiff.File
+		sbs      bool
+		new, del bool
+	}{
+		{&gitdiff.File{OldName: "a.go", NewName: "a.go"}, true, false, false},
+		{&gitdiff.File{NewName: "a.go", IsNew: true}, false, true, false},
+		{&gitdiff.File{OldName: "a.go", IsDelete: true}, false, false, true},
+	}
+	for _, c := range cases {
+		sbs, opts := dirFileKindOf(c.file).deltaLayout(true)
+		if sbs != c.sbs || opts.IsNew != c.new || opts.IsDelete != c.del {
+			t.Errorf("%+v: got sbs=%v opts=%+v", c.file, sbs, opts)
+		}
+		if opts.OmitFileHeader {
+			t.Errorf("%+v: a directory view must keep the file header", c.file)
+		}
+	}
+	if sbs, _ := dirFileKindOf(&gitdiff.File{OldName: "a", NewName: "a"}).deltaLayout(false); sbs {
+		t.Error("unified mode must stay unified")
+	}
+}
