@@ -91,18 +91,32 @@ func (m *Model) topLine() int {
 	return m.fvp.GetItemMetrics().FirstVisibleItemIdx
 }
 
-// CurrentFilePath is the path of the file at the top of a directory view's
-// viewport ("" in a single-file view or above the first file).
+// focusLine is the line the view is "at": the selected line with selection
+// on (j/k move it, not the viewport), else the viewport's top line. -1 for
+// none.
+func (m *Model) focusLine() int {
+	if m.fvp.GetSelectionEnabled() {
+		if m.fvp.GetItemMetrics().TotalItems == 0 {
+			return -1
+		}
+		return m.fvp.GetSelectedItemIdx()
+	}
+	return m.topLine()
+}
+
+// CurrentFilePath is the path of the file at a directory view's focus line
+// (the top line, or the selected one) — "" in a single-file view or above
+// the first file.
 func (m *Model) CurrentFilePath() string {
 	node := m.followable()
 	if node == nil {
 		return ""
 	}
-	top := m.topLine()
-	if top < 0 {
+	line := m.focusLine()
+	if line < 0 {
 		return ""
 	}
-	idx := currentFileIdx(node.fileStarts, top, m.jump, node.key)
+	idx := currentFileIdx(node.fileStarts, line, m.jump, node.key)
 	if idx < 0 || idx >= len(node.filePaths) {
 		return ""
 	}
@@ -115,24 +129,41 @@ func (m *Model) IsDirView() bool {
 	return m.dir != nil
 }
 
-// JumpFile scrolls a directory view to the start of the next (delta > 0) or
-// previous (delta < 0) file. It reports whether it moved.
+// JumpFile scrolls a directory view so the next (delta > 0) or previous
+// (delta < 0) file starts at the top; with selection on it also selects
+// that first line. It reports whether it moved.
 func (m *Model) JumpFile(delta int) bool {
 	node := m.followable()
 	if node == nil {
 		return false
 	}
-	top := m.topLine()
-	if top < 0 {
+	line := m.focusLine()
+	if line < 0 {
 		return false
 	}
-	cur := currentFileIdx(node.fileStarts, top, m.jump, node.key)
-	target := jumpTarget(node.fileStarts, top, cur, delta)
+	cur := currentFileIdx(node.fileStarts, line, m.jump, node.key)
+	target := jumpTarget(node.fileStarts, line, cur, delta)
 	if target < 0 {
 		return false
 	}
-	m.fvp.GoToTop()
-	m.fvp.ScrollDown(node.fileStarts[target])
-	m.jump = fileJump{ok: true, key: node.key, idx: target, top: m.topLine()}
+	start := node.fileStarts[target]
+	if m.fvp.GetSelectionEnabled() {
+		// With selection on, scrolling moves the selection, which brought
+		// the file only to the bottom edge: scroll with it off, then select.
+		m.fvp.SetSelectionEnabled(false)
+		m.scrollTopTo(start)
+		m.fvp.SetSelectionEnabled(true)
+		m.fvp.SetSelectedItemIdx(start) // a short last file can't reach the top
+	} else {
+		m.scrollTopTo(start)
+	}
+	m.jump = fileJump{ok: true, key: node.key, idx: target, top: m.focusLine()}
 	return true
+}
+
+// scrollTopTo puts line at the viewport's top, or as near as the end of the
+// diff allows (selection off).
+func (m *Model) scrollTopTo(line int) {
+	m.fvp.GoToTop()
+	m.fvp.ScrollDown(line)
 }
