@@ -1,6 +1,9 @@
 package diffviewer
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -10,7 +13,68 @@ import (
 	"github.com/dlvhdr/diffnav/pkg/ui/common"
 )
 
+// pinDeltaFeatures makes hasDeltaFeature answer has for the test's duration.
+func pinDeltaFeatures(t *testing.T, has bool) {
+	t.Helper()
+	prev := hasDeltaFeature
+	hasDeltaFeature = func(string) bool { return has }
+	t.Cleanup(func() { hasDeltaFeature = prev })
+}
+
+// Without the gitconfig's miasma features (another machine), Miasma falls
+// back to diffnav's own delta styling instead of delta's defaults.
+func TestMakeDeltaArgs_MiasmaWithoutFeatureFallsBack(t *testing.T) {
+	pinDeltaFeatures(t, false)
+	common.RegisterSupportedTints()
+	for id, want := range map[string][]string{
+		"miasma_dark":  {"--syntax-theme=gruvbox-dark", "--dark"},
+		"miasma_light": {"--syntax-theme=gruvbox-light", "--light"},
+	} {
+		common.Themes.SetTintID(id)
+		styles := common.MakeStyles()
+		m := New(true, &styles)
+		args := m.makeDeltaArgs(true, 120, deltaOpts{})
+		if slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "--features") }) {
+			t.Errorf("%s: no feature in the gitconfig, yet passed one: %q", id, args)
+		}
+		for _, w := range want {
+			if !slices.Contains(args, w) {
+				t.Errorf("%s: fallback styling lacks %q: %q", id, w, args)
+			}
+		}
+		if !slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "--plus-style=") }) {
+			t.Errorf("%s: fallback must style +/- lines itself: %q", id, args)
+		}
+	}
+}
+
+func TestGitHasDeltaFeature(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	home := t.TempDir()
+	gitconfig := "[delta \"probe-feature\"]\n\tdark = true\n"
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(gitconfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, ".gitconfig"))
+	t.Chdir(home)
+	if !gitHasDeltaFeature("probe-feature") {
+		t.Error("defined feature not found")
+	}
+	if gitHasDeltaFeature("probe-feature-missing") {
+		t.Error("missing feature reported as present")
+	}
+	if gitHasDeltaFeature("probe") {
+		t.Error("a feature name must match whole, not as a prefix")
+	}
+}
+
 func TestMakeDeltaArgs_MiasmaUsesGitconfigFeature(t *testing.T) {
+	pinDeltaFeatures(t, true)
 	common.RegisterSupportedTints()
 	for id, feature := range map[string]string{
 		"miasma_dark":  "miasma-dark",

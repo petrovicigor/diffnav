@@ -79,6 +79,9 @@ func MakeStyles() Styles {
 	}
 }
 
+// SupportedThemeToDeltaSyntax is the syntax theme diffnav's own delta styling
+// uses for each tint. The Miasma entries apply only when the gitconfig lacks
+// the miasma-dark / miasma-light delta features (which bring their own).
 var SupportedThemeToDeltaSyntax = map[string]string{
 	TintMiasmaDark.ID:                 "gruvbox-dark",
 	TintMiasmaLight.ID:                "gruvbox-light",

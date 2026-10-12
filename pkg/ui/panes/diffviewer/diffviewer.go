@@ -744,15 +744,20 @@ func singleFileOpts(file *gitdiff.File) deltaOpts {
 
 // deltaFeature is the gitconfig delta feature that styles the diff for
 // theme ("" = diffnav styles delta itself). The Miasma tints hand all
-// colours to the user's own miasma-dark / miasma-light delta features.
+// colours to the user's own miasma-dark / miasma-light delta features, when
+// the gitconfig has them (hasDeltaFeature).
 func deltaFeature(theme *tint.Tint) string {
 	if !common.IsMiasma(theme) {
 		return ""
 	}
+	name := "miasma-light"
 	if theme.Dark {
-		return "miasma-dark"
+		name = "miasma-dark"
 	}
-	return "miasma-light"
+	if !hasDeltaFeature(name) {
+		return ""
+	}
+	return name
 }
 
 // featureHeaderArgs shape delta's file and hunk headers for a pane that is
