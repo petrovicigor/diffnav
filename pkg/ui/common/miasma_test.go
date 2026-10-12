@@ -1,6 +1,10 @@
 package common
 
-import "testing"
+import (
+	"image/color"
+	"math"
+	"testing"
+)
 
 func TestResolveThemeID(t *testing.T) {
 	env := func(mode string) func(string) string {
@@ -51,5 +55,26 @@ func TestMiasmaTintsRegisteredAndStyled(t *testing.T) {
 		if got := LipglossColorToHex(s.Colors.CurrentBg); got != mc.currentBg {
 			t.Errorf("%s current bg = %s, want %s", id, got, mc.currentBg)
 		}
+		// The scroll pill's text must read on its BrightBlack body.
+		if r := contrast(s.Colors.PillFg, s.Tint.BrightBlack); r < 2.8 {
+			t.Errorf("%s scroll pill contrast %.2f:1, want ≥ 2.8", id, r)
+		}
 	}
+}
+
+// contrast is the WCAG contrast ratio of a and b.
+func contrast(a, b color.Color) float64 {
+	lum := func(c color.Color) float64 {
+		r, g, b, _ := c.RGBA()
+		ch := func(v uint32) float64 {
+			s := float64(v) / 0xffff
+			if s <= 0.03928 {
+				return s / 12.92
+			}
+			return math.Pow((s+0.055)/1.055, 2.4)
+		}
+		return 0.2126*ch(r) + 0.7152*ch(g) + 0.0722*ch(b)
+	}
+	la, lb := lum(a), lum(b)
+	return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
 }

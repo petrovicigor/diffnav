@@ -73,6 +73,9 @@ var (
 type miasmaColors struct {
 	selectionFg, selectionBg, footerBg, currentBg    string
 	matchFg, matchBg, matchFocusedFg, matchFocusedBg string
+	// pillFg is the scroll pill's text on its BrightBlack body: the tint's
+	// White is a dark brown in light mode, near-invisible there (1.6:1).
+	pillFg string
 }
 
 var (
@@ -85,6 +88,7 @@ var (
 		matchBg:        "#5f875f", // nvim Search
 		matchFocusedFg: "#222222",
 		matchFocusedBg: "#bb7744", // nvim IncSearch
+		pillFg:         "#c2c2b0", // White, as before (3.1:1 on #666666)
 	}
 	miasmaLightColors = miasmaColors{
 		selectionFg:    "#5c6838",
@@ -95,6 +99,7 @@ var (
 		matchBg:        "#7d6b2e",
 		matchFocusedFg: "#e8e0c8",
 		matchFocusedBg: "#925e2e",
+		pillFg:         "#e8e0c8", // parchment on #8a8070 (3.0:1), dark mode's mirror
 	}
 )
 

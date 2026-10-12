@@ -30,6 +30,8 @@ type Colors struct {
 	// Search match highlights in the diff viewer.
 	MatchFg, MatchBg               color.Color
 	MatchFocusedFg, MatchFocusedBg color.Color
+	// PillFg is the text of the diff viewer's scroll pill ("26% (38/142)").
+	PillFg color.Color
 }
 
 func MakeStyles() Styles {
@@ -52,6 +54,7 @@ func MakeStyles() Styles {
 		MatchBg:        lipgloss.Lighten(selectionBg, 0.1),
 		MatchFocusedFg: lipgloss.Lighten(t.Yellow, 0.5),
 		MatchFocusedBg: lipgloss.Darken(t.Yellow, 0.2),
+		PillFg:         t.White,
 	}
 
 	if IsMiasma(t) {
@@ -67,6 +70,7 @@ func MakeStyles() Styles {
 		colors.MatchBg = hexColor(mc.matchBg)
 		colors.MatchFocusedFg = hexColor(mc.matchFocusedFg)
 		colors.MatchFocusedBg = hexColor(mc.matchFocusedBg)
+		colors.PillFg = hexColor(mc.pillFg)
 	}
 
 	return Styles{

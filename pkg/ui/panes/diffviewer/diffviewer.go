@@ -117,7 +117,7 @@ func viewportStyles(styles *common.Styles) viewport.Styles {
 			BorderForeground(styles.Tint.BrightBlack).
 			Background(styles.Tint.BrightBlack).
 			Border(lipgloss.Border{Left: "", Right: ""}, false, true, false, true).
-			Foreground(styles.Tint.White).
+			Foreground(styles.Colors.PillFg).
 			Italic(true),
 	}
 }
