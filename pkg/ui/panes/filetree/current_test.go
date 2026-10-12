@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/dlvhdr/diffnav/pkg/config"
+	"github.com/dlvhdr/diffnav/pkg/dirnode"
 	"github.com/dlvhdr/diffnav/pkg/ui/common"
 )
 
@@ -78,5 +79,55 @@ func TestSetCurrentFileMarksOnlyThatFile(t *testing.T) {
 	copied.SetCurrentFile("")
 	if strings.Contains(copied.View(), currentBg) {
 		t.Fatal("clearing the mark should remove the highlight")
+	}
+}
+
+// A file inside a collapsed directory has no row of its own: the directory
+// that hides it is marked instead.
+func TestSetCurrentFileMarksCollapsedDirectory(t *testing.T) {
+	f, err := os.Open("testdata/gh_dash_pr.diff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, _, err := gitdiff.Parse(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	common.RegisterSupportedTints()
+	common.Themes.SetTintID("miasma_dark")
+	styles := common.MakeStyles()
+	m := New(config.DefaultConfig(), &styles)
+	m.SetSize(50, 30)
+	m = m.SetFiles(files)
+
+	const file = "ui/components/reposection/commands.go"
+	closed := false
+	for _, node := range m.t.AllNodes() {
+		if d, ok := node.GivenValue().(*dirnode.DirNode); ok && strings.HasSuffix(d.FullPath, "reposection") {
+			node.Close()
+			closed = true
+		}
+	}
+	if !closed {
+		t.Fatal("precondition: no reposection directory in the tree")
+	}
+
+	m.SetCurrentFile(file)
+	currentBg := "48;2;47;52;36" // Miasma dark CurrentBg #2f3424
+	var marked []string
+	for _, line := range strings.Split(m.View(), "\n") {
+		if strings.Contains(line, currentBg) {
+			marked = append(marked, ansi.Strip(line))
+		}
+	}
+	if len(marked) != 1 || !strings.Contains(marked[0], "reposection") {
+		t.Fatalf("expected the collapsed reposection row marked, got %q", marked)
+	}
+
+	m.SetCurrentFile("ui/ui.go") // not under it: the directory's mark goes
+	for _, line := range strings.Split(m.View(), "\n") {
+		if strings.Contains(line, currentBg) && strings.Contains(ansi.Strip(line), "reposection") {
+			t.Fatalf("reposection still marked: %q", ansi.Strip(line))
+		}
 	}
 }

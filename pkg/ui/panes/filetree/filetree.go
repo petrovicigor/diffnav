@@ -98,6 +98,13 @@ func (m *Model) updateStyles() {
 		TreeStyle:       base,
 		RootNodeStyle:   base.Foreground(m.Styles.Tint.BrightBlue),
 		ParentNodeStyle: base.Foreground(m.Styles.Tint.BrightBlue),
+		ParentNodeStyleFunc: func(children tree.Nodes, i int) lipgloss.Style {
+			s := base.Foreground(m.Styles.Tint.BrightBlue)
+			if m.holdsCurrent(children.At(i)) {
+				return s.Bold(true).Background(m.Styles.Colors.CurrentBg)
+			}
+			return s
+		},
 		NodeStyleFunc: func(children tree.Nodes, i int) lipgloss.Style {
 			if fn, ok := children.At(i).GivenValue().(*filenode.FileNode); ok &&
 				m.isCurrent(fn.Path()) {
@@ -551,13 +558,42 @@ func (m *Model) SetCurrentFile(path string) bool {
 	if path == "" {
 		return true
 	}
-	for _, node := range m.t.AllNodes() {
-		if fn, ok := node.GivenValue().(*filenode.FileNode); ok && fn.Path() == path {
-			m.t.SetViewportYOffset(revealLine(node.LineOffset(), scroll, m.t.Height(), treeScrollOff))
-			break
-		}
+	if node := m.currentNode(path); node != nil {
+		m.t.SetViewportYOffset(revealLine(node.LineOffset(), scroll, m.t.Height(), treeScrollOff))
 	}
 	return true
+}
+
+// currentNode is the row that shows path: its file, or, when the file sits
+// in a collapsed directory, that directory (nil when neither is drawn).
+func (m *Model) currentNode(path string) *tree.Node {
+	var dir *tree.Node
+	for _, node := range m.t.AllNodes() {
+		switch val := node.GivenValue().(type) {
+		case *filenode.FileNode:
+			if val.Path() == path {
+				return node
+			}
+		case *dirnode.DirNode:
+			if !node.IsOpen() && inDir(path, val.FullPath) {
+				dir = node
+			}
+		}
+	}
+	return dir
+}
+
+// holdsCurrent reports whether node is a collapsed directory holding the
+// marked file: the file's own row is not drawn, so the directory's is
+// marked instead (only the outermost collapsed one is drawn).
+func (m *Model) holdsCurrent(node *tree.Node) bool {
+	dir, ok := node.GivenValue().(*dirnode.DirNode)
+	return ok && !node.IsOpen() && m.current != nil && *m.current != "" && inDir(*m.current, dir.FullPath)
+}
+
+// inDir reports whether file is somewhere under the directory dir.
+func inDir(file, dir string) bool {
+	return dir == "/" || strings.HasPrefix(file, strings.TrimSuffix(dir, "/")+"/")
 }
 
 // revealLine is the viewport offset that shows line (with up to scrollOff
