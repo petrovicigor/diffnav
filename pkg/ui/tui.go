@@ -264,19 +264,7 @@ func (m mainModel) fetchWatchDiff() tea.Msg {
 	return watchResultMsg{output: output, err: err}
 }
 
-// Update runs update, then points the file tree's "current" mark at the
-// file the diff viewer is scrolled to: anything (keys, mouse, a re-render,
-// a resize) can move the viewport.
 func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	next, cmd := m.update(msg)
-	if mm, ok := next.(mainModel); ok {
-		mm.fileTree.SetCurrentFile(mm.diffViewer.CurrentFilePath())
-		return mm, cmd
-	}
-	return next, cmd
-}
-
-func (m mainModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	log.Debug("tui", "msg", fmt.Sprintf("%T", msg))
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
@@ -636,7 +624,8 @@ func (m *mainModel) onThemeChanged(themeId string) tea.Cmd {
 		m.styles = common.MakeStyles()
 		m.fileTree.SetStyles(&m.styles)
 		m.applySearchStyles()
-		return m.diffViewer.UpdateTheme(&m.styles)
+		m.diffViewer.SetStyles(&m.styles)
+		return m.diffViewer.UpdateTheme()
 	}
 	return nil
 }

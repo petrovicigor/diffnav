@@ -276,6 +276,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 // scrollbarWidth is what the viewer's width holds besides the diff: a gap
 // and the scrollbar (sideColumn), plus one column the layout spends on the
 // tree's separator without taking it off the width it hands the viewer.
+// If the layout ever subtracts that column itself, this must drop to 2:
+// TestChrome_HeaderRuleJoinsSeparator (pkg/ui) fails either way (the
+// header rule ends a column short, or rows overflow), so it can't go
+// unnoticed on a rebase.
 const scrollbarWidth = 3
 
 // View is the viewport with a gap and a column beside it: the scrollbar
@@ -383,12 +387,16 @@ func (m *Model) diffSettled() tea.Cmd {
 	return tea.Tick(resizeDebounce, func(time.Time) tea.Msg { return renderDueMsg{gen: gen} })
 }
 
-// UpdateTheme re-styles the viewer with styles (the theme's new Styles) and
-// re-renders the diff.
-func (m *Model) UpdateTheme(styles *common.Styles) tea.Cmd {
-	if styles != nil {
-		m.Styles = styles
-	}
+// SetStyles hands the viewer the theme's new Styles; UpdateTheme applies them.
+// (The tui's styles live in a model that is copied around, so the pointer
+// the viewer was built with goes stale.)
+func (m *Model) SetStyles(styles *common.Styles) {
+	m.Styles = styles
+}
+
+// UpdateTheme re-styles the viewer for the current theme and re-renders the
+// diff.
+func (m *Model) UpdateTheme() tea.Cmd {
 	m.fvp.SetViewportStyles(viewportStyles(m.Styles))
 	m.fvp.SetFilterableViewportStyles(filterableStyles(m.Styles))
 	m.sb.Styles = scrollbarStyles(m.Styles)

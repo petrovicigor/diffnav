@@ -148,7 +148,8 @@ func TestLateThemeRenderIsDropped(t *testing.T) {
 	m, darkCmd := m.SetDirPatch("/", files)
 	common.Themes.SetTintID("miasma_light")
 	styles := common.MakeStyles()
-	lightCmd := m.UpdateTheme(&styles)
+	m.SetStyles(&styles)
+	lightCmd := m.UpdateTheme()
 	m = land(t, m, lightCmd)
 	m = land(t, m, darkCmd)
 

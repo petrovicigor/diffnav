@@ -237,7 +237,7 @@ func init() {
 			log.Fatal(err)
 		}
 		p := tea.NewProgram(
-			ui.New(ui.ModelOpts{Input: input, PRUrl: prURL, Panel: panelFlag}, cfg),
+			ui.NewFollowing(ui.ModelOpts{Input: input, PRUrl: prURL, Panel: panelFlag}, cfg),
 			tea.WithInput(ttyIn),
 		)
 
