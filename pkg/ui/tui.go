@@ -710,7 +710,7 @@ func (m mainModel) View() tea.View {
 	if m.width > 0 {
 		if m.isSidebarVisible() {
 			sidebarW := m.sidebarWidth()
-			rightW := max(m.width-sidebarW, 0)
+			rightW := max(m.width-sidebarW-1, 0) // -1: the junction
 			leftLine := lipgloss.NewStyle().
 				Foreground(leftColor).
 				Render(strings.Repeat("─", sidebarW))
@@ -720,9 +720,11 @@ func (m mainModel) View() tea.View {
 				Render(strings.Repeat("─", rightW))
 			separator = leftLine + junction + rightLine
 		} else {
-			separator = lipgloss.NewStyle().
+			// The grab line below starts in the first column: corner it.
+			corner := lipgloss.NewStyle().Foreground(m.styles.Tint.Black).Render("┌")
+			separator = corner + lipgloss.NewStyle().
 				Foreground(rightColor).
-				Render(strings.Repeat("─", m.width))
+				Render(strings.Repeat("─", max(m.width-1, 0)))
 		}
 	}
 
@@ -752,12 +754,13 @@ func (m mainModel) View() tea.View {
 		// Width(0) means only the border is rendered (1 char).
 		grabLine := lipgloss.NewStyle().
 			Width(0).
-			Height(m.mainContentHeight()-1).
+			Height(m.mainContentHeight()).
 			Border(lipgloss.NormalBorder(), false, true, false, false).
 			BorderForeground(m.styles.Tint.Black).
 			Render("")
 		sidebar = grabLine
 	}
+	sidebar = teeAt(sidebar, m.diffViewer.RuleRow())
 
 	dv := zone.Mark(zoneDiffViewer, m.diffViewer.View())
 	mainContent := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, dv)

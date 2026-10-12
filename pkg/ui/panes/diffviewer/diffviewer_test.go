@@ -78,3 +78,26 @@ Date:   Mon Jan 1 00:00:00 2026 +0000
 		}
 	}
 }
+
+func TestSideColumn(t *testing.T) {
+	lines := []string{"name", "+1 -1", "─────", "Search…", "a", "bb", "c", "40%"}
+	got := sideColumn(lines, 5, 4, "┃\n│\n│", 2, "══")
+	want := []string{
+		"name   ",   // header: padded, blank column
+		"+1 -1  ",   //
+		"─────══",   // rule row carries the rule to the edge
+		"Search…  ", // search line: no track
+		"a     ┃",   // diff lines: gap + scrollbar
+		"bb    │",
+		"c     │",
+		"40%    ", // footer: no track
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("row %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	if blank := sideColumn([]string{"x"}, 2, 0, "", -1, "══"); blank[0] != "x   " {
+		t.Errorf("no scrollbar: got %q, want blanks", blank[0])
+	}
+}

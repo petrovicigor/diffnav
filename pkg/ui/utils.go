@@ -66,3 +66,23 @@ func relativeTime(t time.Time) string {
 		return fmt.Sprintf("%dy", years)
 	}
 }
+
+// teeAt turns the separator ending row of block (a pane whose right border
+// is its last cell) into "├", so the rule the diff viewer draws on that row
+// joins the separator instead of butting into it. Out-of-range rows and
+// rows without a border are left alone.
+func teeAt(block string, row int) string {
+	if row < 0 {
+		return block
+	}
+	lines := strings.Split(block, "\n")
+	if row >= len(lines) {
+		return block
+	}
+	i := strings.LastIndex(lines[row], "│")
+	if i < 0 {
+		return block
+	}
+	lines[row] = lines[row][:i] + "├" + lines[row][i+len("│"):]
+	return strings.Join(lines, "\n")
+}

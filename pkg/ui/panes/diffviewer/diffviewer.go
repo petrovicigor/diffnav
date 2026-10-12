@@ -244,21 +244,73 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-const scrollbarWidth = 2 // 1 scrollbar character + 1 padding
+// scrollbarWidth is what the viewer's width holds besides the diff: a gap
+// and the scrollbar (sideColumn), plus one column the layout spends on the
+// tree's separator without taking it off the width it hands the viewer.
+const scrollbarWidth = 3
 
+// View is the viewport with a gap and a column beside it: the scrollbar
+// next to the diff lines only, the header's rule carried through to the
+// edge, and blanks beside the header text, the search line and the footer.
+// (The scrollbar used to run the full height, so the header rule ran into
+// its track and its thumb sat beside the file name; and with no gap, every
+// full-width delta rule butted into the track.)
 func (m Model) View() string {
-	vpView := m.fvp.View()
+	lines := strings.Split(m.fvp.View(), "\n")
+	top, bottom := m.headerRows()+1, 1 // header, search line | footer
+	track := max(len(lines)-top-bottom, 0)
 	itemMetrics := m.fvp.GetItemMetrics()
 	scrollbar := m.sb.View(
-		m.fvp.GetHeight(),
+		track,
 		itemMetrics.TotalItems,
 		itemMetrics.FirstVisibleItemIdx,
 		itemMetrics.LastVisibleItemIdx,
 	)
+	rule := lipgloss.NewStyle().Foreground(m.Styles.Tint.Black).Render("──")
+	return strings.Join(
+		sideColumn(lines, m.contentWidth(), top, scrollbar, m.RuleRow(), rule),
+		"\n",
+	)
+}
+
+// sideColumn pads every line to width and appends two cells: a gap and the
+// scrollbar's row from row top on (none when it is ""); rule (two cells) on
+// ruleRow; blanks elsewhere.
+func sideColumn(lines []string, width, top int, scrollbar string, ruleRow int, rule string) []string {
+	var bar []string
 	if scrollbar != "" {
-		vpView = lipgloss.JoinHorizontal(lipgloss.Top, vpView, scrollbar)
+		bar = strings.Split(scrollbar, "\n")
 	}
-	return vpView
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		cell := "  "
+		switch {
+		case i == ruleRow:
+			cell = rule
+		case i >= top && i-top < len(bar):
+			cell = " " + bar[i-top]
+		}
+		if pad := width - lipgloss.Width(line); pad > 0 {
+			line += strings.Repeat(" ", pad)
+		}
+		out[i] = line + cell
+	}
+	return out
+}
+
+// headerRows is how many lines the header takes in the viewport (an empty
+// header is still one blank line there).
+func (m Model) headerRows() int {
+	return len(strings.Split(m.headerView(), "\n"))
+}
+
+// RuleRow is the row of the header's bottom rule in View, or -1 with no
+// header. The layout joins the tree's separator to it there.
+func (m Model) RuleRow() int {
+	if m.headerView() == "" {
+		return -1
+	}
+	return m.headerRows() - 1
 }
 
 func (m *Model) SetSize(width, height int) tea.Cmd {
@@ -267,6 +319,9 @@ func (m *Model) SetSize(width, height int) tea.Cmd {
 	m.fvp.SetWidth(m.contentWidth())
 	m.fvp.SetHeight(m.Height)
 	m.ClearCache()
+	// The header is pre-rendered at a width: without this its rule kept the
+	// old width when the tree was hidden or shown.
+	m.updateHeader()
 	return m.diff()
 }
 
