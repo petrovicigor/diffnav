@@ -1,8 +1,10 @@
 package diffviewer
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -113,6 +115,8 @@ type Model struct {
 	// gen numbers render requests: a render lands only if no newer request
 	// (another node, width, theme or layout) was made since.
 	gen uint64
+	// cancel stops the render running (nil when none).
+	cancel context.CancelFunc
 	// rootAdded / rootDeleted are the stats of the whole diff ("/").
 	rootAdded, rootDeleted int64
 }
@@ -256,6 +260,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.cache[msg.key] = node
 			m.show(node)
 		}
+	case renderDueMsg:
+		if msg.gen == m.gen {
+			cmds = append(cmds, m.diff())
+		}
 	}
 
 	fvp, fvpCmd := m.fvp.Update(msg)
@@ -335,6 +343,7 @@ func (m Model) RuleRow() int {
 }
 
 func (m *Model) SetSize(width, height int) tea.Cmd {
+	first, resized := m.Width == 0, width != m.Width
 	m.Width = width
 	m.Height = height
 	m.fvp.SetWidth(m.contentWidth())
@@ -342,7 +351,36 @@ func (m *Model) SetSize(width, height int) tea.Cmd {
 	// The header is pre-rendered at a width: without this its rule kept the
 	// old width when the tree was hidden or shown.
 	m.updateHeader()
-	return m.diff()
+	switch {
+	case !resized:
+		return nil // the height does not change a render
+	case first:
+		return m.diff()
+	}
+	return m.diffSettled()
+}
+
+// resizeDebounce is how long a new width must hold before it is rendered.
+var resizeDebounce = 80 * time.Millisecond
+
+// renderDueMsg asks for the render of a width that has held (diffSettled).
+type renderDueMsg struct{ gen uint64 }
+
+// diffSettled is diff for a width that may still be changing (a window
+// edge being dragged): a cached render shows at once; anything else renders
+// once no other request came for resizeDebounce, so a resize storm runs
+// delta once instead of once per step. The render on screen stays meanwhile.
+func (m *Model) diffSettled() tea.Cmd {
+	node, dir := m.asked()
+	if node == nil {
+		return nil
+	}
+	if _, ok := m.cache[m.renderKey(node, dir)]; ok {
+		return m.diff()
+	}
+	m.stopRender()
+	gen := m.gen
+	return tea.Tick(resizeDebounce, func(time.Time) tea.Msg { return renderDueMsg{gen: gen} })
 }
 
 // UpdateTheme re-styles the viewer with styles (the theme's new Styles) and
@@ -362,24 +400,41 @@ func (m Model) contentWidth() int {
 	return m.Width - scrollbarWidth
 }
 
+// asked is what was asked for: the file, else the directory (dir true).
+func (m *Model) asked() (node *cachedNode, dir bool) {
+	if m.file != nil {
+		return m.file, false
+	}
+	return m.dir, m.dir != nil
+}
+
 // diff shows the render of what was asked for (file or dir) at the current
 // width, theme and layout: from the cache when it was rendered before, or
-// by starting its render, which supersedes any render still running.
+// by starting its render. Either way any render still running is cancelled.
 func (m *Model) diff() tea.Cmd {
-	node, dir := m.file, false
-	if node == nil {
-		node, dir = m.dir, true
-	}
+	node, dir := m.asked()
 	if node == nil || m.contentWidth() <= 0 || (!dir && len(node.files) != 1) {
 		return nil
 	}
 	key := m.renderKey(node, dir)
-	m.gen++ // whatever is still rendering is no longer wanted
+	m.stopRender()
 	if cached, ok := m.cache[key]; ok {
 		m.show(cached)
 		return nil
 	}
-	return m.newRender(node, dir, key).cmd()
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+	return m.newRender(node, dir, key).cmd(ctx)
+}
+
+// stopRender cancels the render running (its delta processes are killed)
+// and makes any render already on its way stale.
+func (m *Model) stopRender() {
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
+	m.gen++
 }
 
 // show puts a finished render on screen.
@@ -541,7 +596,7 @@ func (m Model) renderPreamble(preamble string) string {
 // before, or still rendering, is shown again.
 func (m *Model) ClearCache() {
 	m.cache = make(nodeCache)
-	m.gen++
+	m.stopRender()
 }
 
 func (m *Model) RootDiffStats() (int64, int64) {

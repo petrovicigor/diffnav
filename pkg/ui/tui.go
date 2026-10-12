@@ -286,6 +286,13 @@ func (m mainModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouse(msg)
 	}
 
+	// A render landing while the file search is open (opening it resizes
+	// the viewer) used to be swallowed by the search.
+	if diffviewer.IsRenderMsg(msg) {
+		m.diffViewer, cmd = m.diffViewer.Update(msg)
+		return m, cmd
+	}
+
 	if m.searchingFiles {
 		var sCmds []tea.Cmd
 		m, sCmds = m.searchUpdate(msg)

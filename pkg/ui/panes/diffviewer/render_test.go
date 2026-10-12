@@ -1,10 +1,13 @@
 package diffviewer
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
@@ -25,7 +28,9 @@ func useFakeDelta(t *testing.T) *fakeDelta {
 	t.Helper()
 	f := &fakeDelta{}
 	prev := runDelta
-	runDelta = func(job deltaJob) (string, error) {
+	renders.reset()
+	t.Cleanup(renders.reset)
+	runDelta = func(_ context.Context, job deltaJob) (string, error) {
 		f.mu.Lock()
 		f.runs++
 		f.mu.Unlock()
@@ -207,7 +212,7 @@ func TestRenderFilesKeepsOrder(t *testing.T) {
 	for i := range names {
 		names[i] = fmt.Sprintf("f%02d", i)
 	}
-	outs, err := renderFiles(len(names), func(i int) (string, error) {
+	outs, err := renderFiles(context.Background(), len(names), func(_ context.Context, i int) (string, error) {
 		return names[i] + "\n", nil
 	})
 	if err != nil {
@@ -218,7 +223,7 @@ func TestRenderFilesKeepsOrder(t *testing.T) {
 			t.Fatalf("outs[%d] = %q, want %q", i, out, want)
 		}
 	}
-	_, err = renderFiles(len(names), func(i int) (string, error) {
+	_, err = renderFiles(context.Background(), len(names), func(_ context.Context, i int) (string, error) {
 		if i == 7 {
 			return "", fmt.Errorf("boom")
 		}
@@ -227,4 +232,167 @@ func TestRenderFilesKeepsOrder(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the render error")
 	}
+}
+
+// A render superseded by a newer request is cancelled: its delta processes
+// stop and it sends nothing.
+func TestSupersededRenderIsCancelled(t *testing.T) {
+	useFakeDelta(t)
+	started := make(chan struct{}, 64)
+	var block atomic.Bool
+	block.Store(true)
+	runDelta = func(ctx context.Context, job deltaJob) (string, error) {
+		if !block.Load() {
+			return fakeRender(job), nil
+		}
+		started <- struct{}{}
+		<-ctx.Done() // a delta that would run forever
+		return "", ctx.Err()
+	}
+
+	files := testFiles(t, 20, 1)
+	m := newRenderTestModel(t, "tokyo_night", 100, 30)
+	m, dirCmd := m.SetDirPatch("/", files)
+	done := make(chan tea.Msg, 1)
+	go func() { done <- dirCmd() }()
+	<-started
+
+	block.Store(false) // the file render runs normally
+	m, fileCmd := m.SetFilePatch(files[3])
+	select {
+	case msg := <-done:
+		if msg != nil {
+			t.Fatalf("a cancelled render sent %T", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the superseded render kept running")
+	}
+	m = land(t, m, fileCmd)
+	if !strings.Contains(screen(m), "new f3.txt 0") {
+		t.Fatalf("the file render should be on screen:\n%s", screen(m))
+	}
+}
+
+// However many renders run, at most maxParallelDeltas deltas run at once.
+func TestDeltaProcessesBoundedAcrossRenders(t *testing.T) {
+	useFakeDelta(t)
+	var mu sync.Mutex
+	running, peak := 0, 0
+	runDelta = func(_ context.Context, job deltaJob) (string, error) {
+		mu.Lock()
+		running++
+		peak = max(peak, running)
+		mu.Unlock()
+		time.Sleep(2 * time.Millisecond)
+		mu.Lock()
+		running--
+		mu.Unlock()
+		return fakeRender(job), nil
+	}
+	var wg sync.WaitGroup
+	for w := range 4 { // four views rendering at once, e.g. a resize storm
+		m := newRenderTestModel(t, "tokyo_night", 80+w, 30)
+		_, cmd := m.SetDirPatch("/", testFiles(t, 30, 1))
+		wg.Add(1)
+		go func() { defer wg.Done(); cmd() }()
+	}
+	wg.Wait()
+	if peak > maxParallelDeltas {
+		t.Fatalf("%d deltas ran at once, the cap is %d", peak, maxParallelDeltas)
+	}
+}
+
+// A watch reload that changes one file re-runs delta for that file only.
+func TestRenderCachePerFile(t *testing.T) {
+	f := useFakeDelta(t)
+	files := testFiles(t, 5, 2)
+	m := newRenderTestModel(t, "tokyo_night", 100, 30)
+	m, cmd := m.SetDirPatch("/", files)
+	m = land(t, m, cmd)
+	if f.runs != 5 {
+		t.Fatalf("first render ran %d deltas, want 5", f.runs)
+	}
+
+	changed := testFiles(t, 5, 2)
+	changed[2] = testFiles(t, 3, 3)[2] // f2.txt, now 3 lines
+	m.ClearCache()
+	m, cmd = m.SetDirPatch("/", changed)
+	m = land(t, m, cmd)
+	if f.runs != 6 {
+		t.Fatalf("re-render ran %d deltas, want 1 (only the changed file)", f.runs-5)
+	}
+	if s := shownText(m); !strings.Contains(s, "new f2.txt 2") || !strings.Contains(s, "f4.txt") {
+		t.Fatalf("expected the new render on screen:\n%s", s)
+	}
+}
+
+// A height change (the header coming or going) does not re-render.
+func TestHeightOnlyResizeKeepsRender(t *testing.T) {
+	f := useFakeDelta(t)
+	m := newRenderTestModel(t, "tokyo_night", 100, 30)
+	m, cmd := m.SetDirPatch("/", testFiles(t, 3, 1))
+	m = land(t, m, cmd)
+	runs := f.runs
+	if cmd := m.SetSize(100, 25); cmd != nil {
+		t.Fatal("a height-only resize should not render")
+	}
+	if f.runs != runs {
+		t.Fatal("a height-only resize ran delta")
+	}
+}
+
+// A resize storm renders once, at the final width, after it settles.
+func TestResizeStormRendersOnce(t *testing.T) {
+	f := useFakeDelta(t)
+	prev := resizeDebounce
+	resizeDebounce = time.Millisecond
+	t.Cleanup(func() { resizeDebounce = prev })
+
+	m := newRenderTestModel(t, "tokyo_night", 100, 30)
+	m, cmd := m.SetDirPatch("/", testFiles(t, 4, 1))
+	m = land(t, m, cmd)
+	runs := f.runs
+
+	var ticks []tea.Cmd
+	for w := 101; w <= 120; w++ {
+		ticks = append(ticks, m.SetSize(w, 30))
+	}
+	renders := 0
+	for _, tick := range ticks {
+		var render tea.Cmd
+		m, render = m.Update(runCmd(t, tick))
+		if msg := runCmd(t, render); msg != nil {
+			if _, ok := msg.(diffContentMsg); ok {
+				renders++
+				m, _ = m.Update(msg)
+			}
+		}
+	}
+	if renders != 1 || f.runs-runs != 4 {
+		t.Fatalf("storm: %d renders, %d deltas; want 1 render of 4 files", renders, f.runs-runs)
+	}
+	if s := screen(m); !strings.Contains(s, "[w=117 ") {
+		t.Fatalf("the render should be at the final width (120 - %d):\n%s", scrollbarWidth, s)
+	}
+	// Back to a width rendered before: from the cache, no wait.
+	if cmd := m.SetSize(100, 30); cmd != nil {
+		if msg := runCmd(t, cmd); msg != nil {
+			t.Fatalf("a cached width should show at once, got %T", msg)
+		}
+	}
+	if !strings.Contains(screen(m), "[w=97 ") {
+		t.Fatalf("the cached render at the old width should be back:\n%s", screen(m))
+	}
+}
+
+// shownText is every line of the render on screen, scrolled or not.
+func shownText(m Model) string {
+	if m.shown == nil {
+		return ""
+	}
+	lines := make([]string, len(m.shown.diff))
+	for i, l := range m.shown.diff {
+		lines[i] = l.item.ContentNoAnsi()
+	}
+	return strings.Join(lines, "\n")
 }

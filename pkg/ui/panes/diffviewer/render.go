@@ -1,6 +1,8 @@
 package diffviewer
 
 import (
+	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,7 +16,7 @@ import (
 	"github.com/dlvhdr/diffnav/pkg/ui/common"
 )
 
-// maxParallelDeltas caps the delta processes a render runs at once.
+// maxParallelDeltas caps the delta processes running at once (deltaSlots).
 const maxParallelDeltas = 8
 
 // deltaJob is one delta process's worth of work. It is built on the main
@@ -91,15 +93,19 @@ func (m *Model) newRender(node *cachedNode, dir bool, key string) renderRequest 
 	return req
 }
 
-// cmd runs the render off the main loop.
-func (r renderRequest) cmd() tea.Cmd {
+// cmd runs the render off the main loop. A render cancelled by ctx (a newer
+// request superseded it) sends nothing.
+func (r renderRequest) cmd(ctx context.Context) tea.Cmd {
 	if len(r.jobs) > 0 {
 		log.Info("executing delta", "files", len(r.jobs), "cmd", fmt.Sprintf(`delta %s`, strings.Join(r.jobs[0].args, " ")))
 	}
 	return func() tea.Msg {
-		outs, err := renderFiles(len(r.jobs), func(i int) (string, error) {
-			return runDelta(r.jobs[i])
+		outs, err := renderFiles(ctx, len(r.jobs), func(ctx context.Context, i int) (string, error) {
+			return renderJob(ctx, r.jobs[i])
 		})
+		if ctx.Err() != nil {
+			return nil
+		}
 		if err != nil {
 			if stdErr, ok := err.(*exec.ExitError); ok {
 				return common.ErrMsg{Err: err, Message: string(stdErr.Stderr)}
@@ -120,37 +126,140 @@ func (r renderRequest) cmd() tea.Cmd {
 	}
 }
 
-// runDelta runs delta for job and returns its output. A var so tests can
-// stand in for delta.
-var runDelta = func(job deltaJob) (string, error) {
-	deltac := exec.Command("delta", job.args...)
+// deltaSlots caps the delta processes running at once in the whole
+// program, across every render: a resize storm or a theme preview spree
+// starts new renders faster than old ones finish (and those are cancelled).
+var deltaSlots = make(chan struct{}, maxParallelDeltas)
+
+// renderJob is job's delta output: from the render cache, else from a delta
+// run once a slot is free. It gives up (ctx's error) as soon as ctx is
+// cancelled, killing a delta already running.
+func renderJob(ctx context.Context, job deltaJob) (string, error) {
+	key := job.cacheKey()
+	if out, ok := renders.get(key); ok {
+		return out, nil
+	}
+	select {
+	case deltaSlots <- struct{}{}:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	defer func() { <-deltaSlots }()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	out, err := runDelta(ctx, job)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", err
+	}
+	renders.put(key, out)
+	return out, nil
+}
+
+// runDelta runs delta for job and returns its output; cancelling ctx kills
+// it. A var so tests can stand in for delta.
+var runDelta = func(ctx context.Context, job deltaJob) (string, error) {
+	deltac := exec.CommandContext(ctx, "delta", job.args...)
 	deltac.Env = deltaEnv(os.Environ(), job.sideBySide)
 	deltac.Stdin = strings.NewReader(job.input)
 	out, err := deltac.Output()
 	return string(out), err
 }
 
-// renderFiles runs render for 0..n-1, at most maxParallelDeltas at a time,
-// and returns the outputs in order (or the first error).
-func renderFiles(n int, render func(i int) (string, error)) ([]string, error) {
+// renderFiles runs render for 0..n-1 in parallel (deltaSlots bounds the
+// processes) and returns the outputs in order, or the first error, or
+// ctx's error once it is cancelled.
+func renderFiles(ctx context.Context, n int, render func(ctx context.Context, i int) (string, error)) ([]string, error) {
 	outs := make([]string, n)
 	errs := make([]error, n)
-	sem := make(chan struct{}, maxParallelDeltas)
 	var wg sync.WaitGroup
 	for i := range n {
 		wg.Add(1)
-		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
-			defer func() { <-sem }()
-			outs[i], errs[i] = render(i)
+			outs[i], errs[i] = render(ctx, i)
 		}()
 	}
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	for _, err := range errs {
 		if err != nil {
 			return nil, err
 		}
 	}
 	return outs, nil
+}
+
+// cacheKey identifies job's output: everything delta is given.
+func (j deltaJob) cacheKey() [sha256.Size]byte {
+	h := sha256.New()
+	for _, a := range j.args {
+		h.Write([]byte(a))
+		h.Write([]byte{0})
+	}
+	if j.sideBySide {
+		h.Write([]byte{1})
+	} else {
+		h.Write([]byte{2})
+	}
+	h.Write([]byte(j.input))
+	var sum [sha256.Size]byte
+	h.Sum(sum[:0])
+	return sum
+}
+
+// renderCacheMaxBytes bounds the render cache; past it the cache starts
+// over (renders of other widths and themes are the bulk of it by then).
+const renderCacheMaxBytes = 64 << 20
+
+// renderCache holds every file's delta output by its job (args and input):
+// shared by all views, so toggles, theme flips and returning to a width
+// re-run delta only for what changed.
+type renderCache struct {
+	mu    sync.Mutex
+	outs  map[[sha256.Size]byte]string
+	bytes int
+}
+
+var renders = &renderCache{}
+
+func (c *renderCache) get(key [sha256.Size]byte) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out, ok := c.outs[key]
+	return out, ok
+}
+
+func (c *renderCache) put(key [sha256.Size]byte, out string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.outs == nil || c.bytes+len(out) > renderCacheMaxBytes {
+		c.outs = map[[sha256.Size]byte]string{}
+		c.bytes = 0
+	}
+	if _, ok := c.outs[key]; !ok {
+		c.bytes += len(out)
+	}
+	c.outs[key] = out
+}
+
+func (c *renderCache) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.outs, c.bytes = nil, 0
+}
+
+// IsRenderMsg reports whether msg is the viewer's own render traffic, which
+// must reach it whatever has the keyboard (the file search included).
+func IsRenderMsg(msg tea.Msg) bool {
+	switch msg.(type) {
+	case diffContentMsg, renderDueMsg:
+		return true
+	}
+	return false
 }
